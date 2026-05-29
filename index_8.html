@@ -1,0 +1,2357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Pocket Pilot v2.0 — MMO Nairobi Drone Sim</title>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<style>
+:root {
+  --neon-cyan: #0284c7;
+  --neon-magenta: #ff4081;
+  --neon-green: #10b981;
+  --bg-dark: #f0f9ff;
+  --hud-bg: rgba(255, 255, 255, 0.85);
+  --border-glow: rgba(2, 132, 199, 0.25);
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+body, html {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-dark);
+  font-family: 'Share Tech Mono', monospace;
+  color: #0f172a;
+}
+
+/* ── UI Panels (Glassmorphism + Neon Lines) ── */
+.hud-panel {
+  background: var(--hud-bg);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--border-glow);
+  border-radius: 6px;
+  box-shadow: 0 0 15px rgba(0, 240, 255, 0.05);
+}
+
+/* ── Floating 3D HUD Landmark Labels ── */
+.landmark-tag {
+  position: absolute;
+  color: #fff;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 2px;
+  background: rgba(7, 3, 18, 0.85);
+  border: 1px solid var(--neon-cyan);
+  padding: 4px 8px;
+  border-radius: 4px;
+  pointer-events: none;
+  transform: translate(-50%, -100%);
+  white-space: nowrap;
+  box-shadow: 0 0 10px rgba(0, 240, 255, 0.4);
+  z-index: 10;
+}
+.tag-spire { border-color: var(--neon-cyan); color: var(--neon-cyan); }
+.tag-crystal { border-color: var(--neon-magenta); color: var(--neon-magenta); }
+
+/* ── Launcher Screen ── */
+#launcher-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%);
+  padding: 20px;
+}
+
+.logo-container {
+  text-align: center;
+  margin-bottom: 30px;
+}
+
+.logo-title {
+  font-family: 'Orbitron', sans-serif;
+  font-size: 42px;
+  font-weight: 900;
+  letter-spacing: 10px;
+  color: #0369a1;
+  text-shadow: 0 0 15px rgba(14, 165, 233, 0.3);
+  animation: logoPulse 2.5s ease-in-out infinite alternate;
+}
+
+@keyframes logoPulse {
+  0% { text-shadow: 0 0 5px rgba(14, 165, 233, 0.2); }
+  100% { text-shadow: 0 0 15px rgba(14, 165, 233, 0.5), 0 0 25px var(--neon-magenta); }
+}
+
+.logo-sub {
+  font-family: 'Orbitron', sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 6px;
+  color: #0284c7;
+  margin-top: 6px;
+}
+
+.menu-card {
+  width: 400px;
+  padding: 30px;
+  text-align: center;
+  border-color: rgba(2, 132, 199, 0.2);
+}
+
+.menu-card h3 {
+  font-family: 'Orbitron', sans-serif;
+  font-size: 13px;
+  letter-spacing: 2px;
+  margin-bottom: 25px;
+  color: #0f172a;
+}
+
+.btn-action {
+  width: 100%;
+  background: linear-gradient(135deg, #0284c7 0%, #10b981 100%);
+  border: 1px solid #0284c7;
+  padding: 15px;
+  color: #fff;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 3px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.3s;
+  box-shadow: 0 4px 15px rgba(2, 132, 199, 0.25);
+}
+
+.btn-action:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(2, 132, 199, 0.4), 0 0 10px rgba(16, 185, 129, 0.3);
+}
+
+.btn-secondary {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.6);
+  border: 1px solid rgba(2, 132, 199, 0.4);
+  padding: 12px;
+  color: #0369a1;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 10px;
+  letter-spacing: 2px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+  margin-top: 12px;
+}
+
+.btn-secondary:hover {
+  background: rgba(2, 132, 199, 0.08);
+  border-color: #0284c7;
+  box-shadow: 0 4px 12px rgba(2, 132, 199, 0.15);
+}
+
+/* ── P2P Link Panel ── */
+#p2p-panel {
+  display: none;
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.qr-box {
+  background: #fff;
+  padding: 8px;
+  width: 166px;
+  height: 166px;
+  margin: 15px auto;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.qr-box img {
+  width: 150px;
+  height: 150px;
+}
+
+.p2p-status {
+  font-size: 11px;
+  color: var(--neon-magenta);
+  font-family: 'Orbitron', sans-serif;
+  letter-spacing: 1px;
+  animation: pulse 1.5s infinite;
+}
+
+.p2p-instructions {
+  font-size: 9px;
+  color: #6366f1;
+  line-height: 1.5;
+  text-align: left;
+  margin-top: 15px;
+  background: rgba(0, 0, 0, 0.3);
+  padding: 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.p2p-link-text {
+  word-break: break-all;
+  font-family: monospace;
+  color: var(--neon-cyan);
+  background: rgba(0, 0, 0, 0.3);
+  padding: 4px;
+  border-radius: 4px;
+  margin-top: 5px;
+  display: block;
+}
+
+/* ── Clean HUD Overlay ── */
+#sim-container {
+  display: none;
+  width: 100vw;
+  height: 100vh;
+  position: relative;
+}
+
+#canvas3d {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.hud-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.hud-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.hud-title-box {
+  padding: 12px 18px;
+}
+
+.hud-title {
+  font-family: 'Orbitron', sans-serif;
+  font-size: 16px;
+  font-weight: 900;
+  letter-spacing: 4px;
+  color: #fff;
+  text-shadow: 0 0 10px var(--neon-cyan);
+}
+
+.hud-status-badge {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  padding: 3px 8px;
+  border-radius: 2px;
+  margin-top: 6px;
+  display: inline-block;
+}
+
+.badge-stabilize {
+  color: var(--neon-green);
+  border: 1px solid rgba(57, 255, 20, 0.4);
+  background: rgba(57, 255, 20, 0.05);
+}
+
+.badge-disarmed {
+  color: var(--neon-magenta);
+  border: 1px solid rgba(255, 0, 127, 0.4);
+  background: rgba(255, 0, 127, 0.05);
+}
+
+.hud-header-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.hud-p2p-badge {
+  padding: 10px 14px;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 9px;
+  letter-spacing: 2px;
+}
+
+.hud-p2p-badge span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: 8px;
+  vertical-align: middle;
+}
+
+.p2p-active span { background: var(--neon-green); box-shadow: 0 0 8px var(--neon-green); }
+.p2p-inactive span { background: #475569; }
+
+.hud-battery {
+  font-size: 9px;
+  color: rgba(165, 180, 252, 0.4);
+  letter-spacing: 1px;
+}
+
+.hud-middle {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-grow: 1;
+}
+
+.hud-panel-left {
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 180px;
+}
+
+.telemetry-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.telemetry-label {
+  font-size: 9px;
+  color: #475569;
+  letter-spacing: 1px;
+}
+
+.telemetry-val {
+  font-size: 13px;
+  color: #0f172a;
+  font-weight: 700;
+}
+
+.val-green { color: var(--neon-green); }
+.val-cyan { color: var(--neon-cyan); }
+
+.hud-crosshair {
+  width: 90px;
+  height: 90px;
+  border: 1px solid rgba(0, 240, 255, 0.2);
+  border-radius: 50%;
+  position: relative;
+}
+
+.hud-crosshair::before, .hud-crosshair::after {
+  content: '';
+  position: absolute;
+  background: var(--neon-cyan);
+  opacity: 0.5;
+}
+
+.hud-crosshair::before {
+  width: 24px;
+  height: 1px;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.hud-crosshair::after {
+  width: 1px;
+  height: 24px;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.hud-panel-right {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 10px;
+}
+
+.alt-track {
+  width: 10px;
+  height: 180px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(0, 240, 255, 0.1);
+  border-radius: 2px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+.alt-fill {
+  background: linear-gradient(to top, var(--neon-cyan), var(--neon-magenta));
+  width: 100%;
+  transition: height 0.08s;
+  box-shadow: 0 0 10px var(--neon-cyan);
+}
+
+.alt-lbl {
+  font-size: 8px;
+  color: rgba(165, 180, 252, 0.3);
+  letter-spacing: 1px;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+}
+
+.hud-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+}
+
+.hud-instructions {
+  padding: 14px 20px;
+  font-size: 9px;
+  color: rgba(165, 180, 252, 0.4);
+  line-height: 2.1;
+  letter-spacing: 1px;
+}
+
+.hud-instructions b {
+  color: var(--neon-cyan);
+}
+
+.hud-compass {
+  width: 90px;
+  height: 90px;
+  border-radius: 50%;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.compass-ring {
+  width: 100%;
+  height: 100%;
+  border: 1px solid rgba(0, 240, 255, 0.15);
+  border-radius: 50%;
+  position: absolute;
+}
+
+.compass-dir {
+  font-size: 8px;
+  color: rgba(165, 180, 252, 0.4);
+  position: absolute;
+}
+
+.dir-n { top: 4px; color: var(--neon-magenta); font-weight: bold; }
+.dir-s { bottom: 4px; }
+.dir-e { right: 4px; }
+.dir-w { left: 4px; }
+
+.compass-needle {
+  width: 2px;
+  height: 40px;
+  background: linear-gradient(to bottom, var(--neon-magenta) 50%, rgba(0,240,255,0.2) 50%);
+  position: absolute;
+  transform-origin: center;
+  transition: transform 0.05s;
+}
+
+.hud-cam-mode {
+  padding: 8px 14px;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 8px;
+  letter-spacing: 2px;
+  color: var(--neon-cyan);
+}
+
+/* ── Mobile Gyro Connection Screen ── */
+#mobile-controller {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  background: radial-gradient(circle at center, #110729 0%, #03010b 100%);
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  padding: 40px;
+}
+
+.m-logo {
+  font-family: 'Orbitron', sans-serif;
+  font-size: 26px;
+  font-weight: 900;
+  letter-spacing: 6px;
+  color: #fff;
+  text-shadow: 0 0 15px var(--neon-cyan);
+  margin-bottom: 8px;
+}
+
+.m-sub {
+  font-size: 9px;
+  letter-spacing: 3px;
+  color: var(--neon-cyan);
+  margin-bottom: 80px;
+}
+
+.m-box {
+  width: 100%;
+  max-width: 320px;
+  padding: 30px;
+  text-align: center;
+  border-color: rgba(0, 240, 255, 0.2);
+}
+
+.m-conn-indicator {
+  font-family: 'Orbitron', sans-serif;
+  font-size: 12px;
+  font-weight: bold;
+  letter-spacing: 2px;
+  margin-bottom: 40px;
+  animation: pulse 1.5s infinite;
+}
+
+.m-disconnected { color: var(--neon-magenta); }
+.m-connected { color: var(--neon-green); text-shadow: 0 0 10px var(--neon-green); }
+
+.btn-m-connect {
+  background: linear-gradient(135deg, #ff007f 0%, #7b00ff 100%);
+  border: 1px solid var(--neon-magenta);
+  color: #fff;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 2px;
+  padding: 16px 24px;
+  border-radius: 6px;
+  cursor: pointer;
+  width: 100%;
+  box-shadow: 0 0 20px rgba(255, 0, 127, 0.35);
+  transition: all 0.3s;
+}
+
+.btn-m-connect:hover {
+  box-shadow: 0 0 30px var(--neon-magenta);
+  transform: scale(1.02);
+}
+
+.gyro-visual {
+  display: none;
+  width: 100px;
+  height: 100px;
+  border: 2px dashed var(--neon-green);
+  border-radius: 50%;
+  margin: 30px auto 0;
+  position: relative;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.05s;
+}
+
+.gyro-ball {
+  width: 20px;
+  height: 20px;
+  background: var(--neon-green);
+  border-radius: 50%;
+  box-shadow: 0 0 15px var(--neon-green);
+  position: absolute;
+  transition: all 0.05s;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+</style>
+</head>
+<body>
+
+<!-- Dynamic 3D Label Overlays (For RPG Spire Labels) -->
+<div id="labels-container" style="position:fixed; inset:0; pointer-events:none; z-index:10;">
+  <div id="lbl-kicc" class="landmark-tag tag-spire">[LVL 50] KICC GRAND SPIRE</div>
+  <div id="lbl-times" class="landmark-tag tag-crystal">[LVL 80] RED CRYSTAL SPIRE</div>
+</div>
+
+<!-- Launcher Screen -->
+<div id="launcher-screen">
+  <div class="logo-container">
+    <div class="logo-title">POCKET-PILOT</div>
+    <div class="logo-sub">MMO FANTASY NAIROBI FLIGHT SIM</div>
+  </div>
+
+  <div class="menu-card glass-panel">
+    <h3>FLIGHT INTERFACE</h3>
+    
+    <button class="btn-action" onclick="launchSim()">▶ LAUNCH SIMULATOR</button>
+    <button class="btn-secondary" onclick="toggleP2PPanel()">📱 LINK MOBILE GYROSCOPE</button>
+
+    <!-- P2P Subpanel -->
+    <div id="p2p-panel">
+      <div class="p2p-status">AWAITING MOBILE SENSOR...</div>
+      <div class="qr-box">
+        <img id="qr-img" src="" alt="Scan to link controller">
+      </div>
+      <div class="p2p-instructions">
+        <b>To Link Mobile Gyroscope:</b>
+        1. Both devices must be on the same local network.
+        2. Scan the QR code or visit this URL on your phone:
+        <span class="p2p-link-text" id="peer-link">Generating...</span>
+        3. Make sure to accept the Gyroscope access request on mobile.
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Main Simulator View -->
+<div id="sim-container">
+  <canvas id="canvas3d"></canvas>
+  <div class="hud-overlay">
+    <div class="hud-header">
+      <div class="hud-title-box hud-panel">
+        <div class="hud-title">POCKET-PILOT</div>
+        <div id="hud-status" class="hud-status-badge badge-disarmed">DISARMED</div>
+      </div>
+      <div class="hud-header-right">
+        <div id="p2p-indicator" class="hud-p2p-badge hud-panel p2p-inactive">
+          <span></span>MOBILE GYRO
+        </div>
+        <div class="hud-battery">BAT 100% | CRYSTA FEED</div>
+      </div>
+    </div>
+
+    <div class="hud-middle">
+      <div class="hud-panel-left hud-panel">
+        <div class="telemetry-row">
+          <span class="telemetry-label">ALT</span>
+          <span class="telemetry-val val-green" id="hud-alt">0.0 m</span>
+        </div>
+        <div class="telemetry-row">
+          <span class="telemetry-label">SPD</span>
+          <span class="telemetry-val" id="hud-spd">0.0 m/s</span>
+        </div>
+        <div class="telemetry-row">
+          <span class="telemetry-label">HDG</span>
+          <span class="telemetry-val val-cyan" id="hud-hdg">0°</span>
+        </div>
+        <div class="telemetry-row">
+          <span class="telemetry-label">LAT</span>
+          <span class="telemetry-val" id="hud-lat">-1.28800</span>
+        </div>
+        <div class="telemetry-row">
+          <span class="telemetry-label">LNG</span>
+          <span class="telemetry-val" id="hud-lng">36.82200</span>
+        </div>
+      </div>
+
+      <div class="hud-crosshair"></div>
+
+      <div class="hud-panel-right hud-panel">
+        <div class="alt-track">
+          <div class="alt-fill" id="hud-alt-fill" style="height: 0%"></div>
+        </div>
+        <span class="alt-lbl">ALTITUDE</span>
+      </div>
+    </div>
+
+    <div class="hud-footer">
+      <div class="hud-instructions hud-panel">
+        <b>W / S</b> &nbsp;PITCH FORWARD / BACKWARD<br>
+        <b>A / D</b> &nbsp;ROLL LEFT / RIGHT (STRAFE)<br>
+        <b>Q / E</b> &nbsp;THROTTLE UP / DOWN (CLIMB)<br>
+        <b>LEFT/RIGHT ARROWS</b> &nbsp;YAW SPIN LEFT / RIGHT<br>
+        <b>V</b> &nbsp;CYCLE CAMERA VIEW
+      </div>
+
+      <div class="hud-compass hud-panel">
+        <div class="compass-ring"></div>
+        <span class="compass-dir dir-n">N</span>
+        <span class="compass-dir dir-s">S</span>
+        <span class="compass-dir dir-e">E</span>
+        <span class="compass-dir dir-w">W</span>
+        <div class="compass-needle" id="hud-compass-needle"></div>
+      </div>
+
+      <div class="hud-cam-mode hud-panel" id="hud-cam-mode">
+        FOLLOW CAM
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Mobile Gyroscope Transmitter Panel -->
+<div id="mobile-controller">
+  <div class="m-logo">POCKET PILOT</div>
+  <div class="m-sub">GYRO CONSOLE</div>
+
+  <div class="m-box hud-panel">
+    <div id="m-conn-status" class="m-conn-indicator m-disconnected">AWAITING CONNECTION</div>
+    
+    <button class="btn-m-connect" id="btn-gyro-auth" onclick="requestGyroAuth()">AUTHORIZE SENSORS</button>
+    
+    <div class="gyro-visual" id="m-gyro-visual">
+      <div class="gyro-ball" id="m-gyro-ball"></div>
+    </div>
+  </div>
+</div>
+
+<script src="three.min.js"></script>
+<script>
+  if (typeof THREE === 'undefined') {
+    document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"><\/script>');
+  }
+</script>
+<script src="peerjs.min.js"></script>
+<script>
+  if (typeof Peer === 'undefined') {
+    document.write('<script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"><\/script>');
+  }
+</script>
+
+<!-- PBR Loaders -->
+<script src="GLTFLoader.js"></script>
+<script>
+  if (typeof THREE.GLTFLoader === 'undefined') {
+    document.write('<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"><\/script>');
+  }
+</script>
+<script src="RGBELoader.js"></script>
+<script>
+  if (typeof THREE.RGBELoader === 'undefined') {
+    document.write('<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/RGBELoader.js"><\/script>');
+  }
+</script>
+
+<!-- Shaders & Postprocessing dependencies -->
+<script src="CopyShader.js"></script>
+<script>
+  if (typeof THREE.CopyShader === 'undefined') {
+    document.write('<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/CopyShader.js"><\/script>');
+  }
+</script>
+<script src="LuminosityHighPassShader.js"></script>
+<script>
+  if (typeof THREE.LuminosityHighPassShader === 'undefined') {
+    document.write('<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/LuminosityHighPassShader.js"><\/script>');
+  }
+</script>
+<script src="SSAOShader.js"></script>
+<script>
+  if (typeof THREE.SSAOShader === 'undefined') {
+    document.write('<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/SSAOShader.js"><\/script>');
+  }
+</script>
+<script src="SimplexNoise.js"></script>
+<script>
+  if (typeof THREE.SimplexNoise === 'undefined') {
+    document.write('<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/math/SimplexNoise.js"><\/script>');
+  }
+</script>
+
+<script src="EffectComposer.js"></script>
+<script>
+  if (typeof THREE.EffectComposer === 'undefined') {
+    document.write('<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/EffectComposer.js"><\/script>');
+  }
+</script>
+<script src="RenderPass.js"></script>
+<script>
+  if (typeof THREE.RenderPass === 'undefined') {
+    document.write('<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/RenderPass.js"><\/script>');
+  }
+</script>
+<script src="ShaderPass.js"></script>
+<script>
+  if (typeof THREE.ShaderPass === 'undefined') {
+    document.write('<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/ShaderPass.js"><\/script>');
+  }
+</script>
+<script src="UnrealBloomPass.js"></script>
+<script>
+  if (typeof THREE.UnrealBloomPass === 'undefined') {
+    document.write('<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/UnrealBloomPass.js"><\/script>');
+  }
+</script>
+<script src="SSAOPass.js"></script>
+<script>
+  if (typeof THREE.SSAOPass === 'undefined') {
+    document.write('<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/SSAOPass.js"><\/script>');
+  }
+</script>
+<script>
+// ── CONFIGURATION & WORLD STATE ──────────────────────────────
+const origin = { lat: -1.2880, lng: 36.8220 }; // Nairobi CBD center
+const METERS_PER_LAT = 110540;
+const METERS_PER_LNG = 111320 * Math.cos(origin.lat * Math.PI / 180);
+
+const ds = {
+  x: 0, z: 0,        // local meters from origin
+  alt: 25,          // altitude in meters above terrain
+  hdg: 0,           // radians
+  tiltF: 0,         // pitch (radians)
+  tiltS: 0,         // roll (radians)
+  lat: origin.lat,
+  lng: origin.lng
+};
+
+let vx = 0, vy = 0, vz = 0; // Velocities
+const MAX_SPEED = 60; // m/s (Anime High-Performance Mode!)
+const ACCEL = 45;     // m/s^2
+const DRAG = 0.05;    // Dampening
+const YAW_SPEED = 2.4; // rad/s
+const CLIMB_SPEED = 24; // m/s
+
+let scene, camera, renderer, clock;
+let isLaunched = false;
+let activeKeys = {};
+let traffic = [], trees = [], pedestrians = [], buildingsList = [], clouds = [];
+let droneModel, engineRings = [], searchlight;
+let dustParticles = [];
+let cameraView = 'follow'; // 'follow', 'fpv', 'orbit'
+let orbitAngle = 0;
+let soundContext;
+
+// Dynamic tile engine settings
+const ZOOM = 17;
+let currentCenterTx = null;
+let currentCenterTy = null;
+const loadedTiles = new Map();
+const TILE_RADIUS = 2; // loads 5x5 grid
+
+// Trail particles for drone thrusters
+const maxTrailPoints = 25;
+const trailGeometries = [];
+const trailMeshes = [];
+const trailHistories = [];
+
+// Procedural KICC variables
+let floatRing, beamLight;
+
+// PeerJS connection
+let peer = null;
+let activeConnection = null;
+let mobileInputs = { fwd: 0, side: 0, up: 0, turn: 0 };
+let peerId = '';
+
+// Gyro values on mobile
+let gyroCalibrated = false;
+let gyroOffset = { beta: 0, gamma: 0 };
+let currentGyro = { beta: 0, gamma: 0 };
+
+// ── UTILITY FUNCTIONS ───────────────────────────────────────
+function latLngToMeters(lat, lng) {
+  return {
+    x: (lng - origin.lng) * METERS_PER_LNG,
+    z: -(lat - origin.lat) * METERS_PER_LAT
+  };
+}
+
+function metersToLatLng(x, z) {
+  return {
+    lat: origin.lat - z / METERS_PER_LAT,
+    lng: origin.lng + x / METERS_PER_LNG
+  };
+}
+
+function lon2tile(lon, zoom) {
+  return Math.floor((lon + 180) / 360 * Math.pow(2, zoom));
+}
+
+function lat2tile(lat, zoom) {
+  return Math.floor((1 - Math.log(Math.tan(lat * Math.PI / 180) + 1 / Math.cos(lat * Math.PI / 180)) / Math.PI) / 2 * Math.pow(2, zoom));
+}
+
+function tile2lon(x, z) {
+  return x / Math.pow(2, z) * 360 - 180;
+}
+
+function tile2lat(y, z) {
+  const n = Math.PI - 2 * Math.PI * y / Math.pow(2, z);
+  return 180 / Math.PI * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)));
+}
+
+// ── PROCEDURAL MMORPG ELEVATION MAP ─────────────────────────
+function getGroundElevation(x, z) {
+  let elev = 0;
+  
+  // Upper Hill rising to the West
+  if (x < -160) {
+    elev += Math.min(50, (-x - 160) * 0.16);
+  }
+  
+  // Uhuru Lake Basin
+  const lakeX = -280;
+  const lakeZ = 330;
+  const distToLake = Math.sqrt((x - lakeX) ** 2 + (z - lakeZ) ** 2);
+  if (distToLake < 240) {
+    const factor = 1 - distToLake / 240;
+    elev -= factor * 12;
+  }
+  
+  // Low-poly style hills
+  elev += Math.sin(x * 0.007) * Math.cos(z * 0.007) * 7;
+  
+  return elev;
+}
+
+// ── P2P INITIALIZATION (DESKTOP) ────────────────────────────
+function toggleP2PPanel() {
+  const panel = document.getElementById('p2p-panel');
+  if (panel.style.display === 'block') {
+    panel.style.display = 'none';
+  } else {
+    panel.style.display = 'block';
+    initP2P();
+  }
+}
+
+function initP2P() {
+  if (peer) return;
+
+  peerId = 'pocket-pilot-mmo-' + Math.floor(1000 + Math.random() * 9000);
+  peer = new Peer(peerId);
+
+  peer.on('open', (id) => {
+    const cleanUrl = window.location.href.split('?')[0];
+    const mobileUrl = `${cleanUrl}?control=${id}`;
+    
+    document.getElementById('qr-img').src = `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(mobileUrl)}`;
+    document.getElementById('peer-link').textContent = mobileUrl;
+    
+    if (window.location.protocol === 'file:') {
+      const instructions = document.querySelector('.p2p-instructions');
+      instructions.innerHTML = `
+        <b style="color:var(--neon-magenta)">P2P local network setup:</b><br>
+        Run a python server inside your Downloads folder:<br>
+        <span class="p2p-link-text">python serve.py</span>
+        Then navigate to the URL shown in your console on computer and phone.
+      `;
+    }
+  });
+
+  peer.on('connection', (conn) => {
+    activeConnection = conn;
+    document.querySelector('.p2p-status').textContent = 'GYRO LINK ESTABLISHED';
+    document.querySelector('.p2p-status').style.color = 'var(--neon-green)';
+    
+    const indicator = document.getElementById('p2p-indicator');
+    indicator.className = 'hud-p2p-badge hud-panel p2p-active';
+    
+    // Auto-launch simulation once mobile connects
+    if (!isLaunched) {
+      launchSim();
+    }
+
+    conn.on('data', (data) => {
+      if (data.type === 'controls') {
+        mobileInputs.fwd = data.fwd || 0;
+        mobileInputs.side = data.side || 0;
+        mobileInputs.up = data.up || 0;
+        mobileInputs.turn = data.turn || 0;
+      }
+    });
+
+    conn.on('close', () => {
+      document.querySelector('.p2p-status').textContent = 'GYRO LINK LOST. AWAITING...';
+      document.querySelector('.p2p-status').style.color = 'var(--neon-magenta)';
+      document.getElementById('p2p-indicator').className = 'hud-p2p-badge hud-panel p2p-inactive';
+    });
+  });
+}
+
+// ── LAUNCH SIMULATOR ──
+function launchSim() {
+  // Web Audio Context initialization
+  try {
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    soundContext = new AudioContext();
+  } catch (e) {}
+
+  document.getElementById('launcher-screen').style.display = 'none';
+  document.getElementById('sim-container').style.display = 'block';
+  
+  initThree();
+  isLaunched = true;
+  animate();
+  
+  // Ensure focus is on the simulation window for keyboard input
+  window.focus();
+}
+
+// ── THREE.JS SETUP ──────────────────────────────────────────
+function initThree() {
+  const container = document.getElementById('sim-container');
+  
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0xdceef5); // Sky base
+  scene.fog = new THREE.FogExp2(0xdceef5, 0.001);
+  
+  camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1500);
+  
+  renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('canvas3d'), antialias: true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.0;
+  
+  // Equirectangular HDRI image-based lighting and skybox setup
+  const pmremGenerator = new THREE.PMREMGenerator(renderer);
+  pmremGenerator.compileEquirectangularShader();
+  
+  const rgbeLoader = new THREE.RGBELoader().setDataType(THREE.UnsignedByteType);
+  rgbeLoader.load('royal_esplanade_1k.hdr', function (texture) {
+    const envMap = pmremGenerator.fromEquirectangular(texture).texture;
+    scene.background = envMap;
+    scene.environment = envMap;
+    texture.dispose();
+    pmremGenerator.dispose();
+  }, undefined, function (err) {
+    // CDN Fallback if local copy is not present/failed
+    rgbeLoader.load('https://raw.githubusercontent.com/mrdoob/three.js/r128/examples/textures/equirectangular/royal_esplanade_1k.hdr', function (texture) {
+      const envMap = pmremGenerator.fromEquirectangular(texture).texture;
+      scene.background = envMap;
+      scene.environment = envMap;
+      texture.dispose();
+      pmremGenerator.dispose();
+    });
+  });
+  
+  // Sky dome hemisphere light for natural ambient bounce
+  const hemiLight = new THREE.HemisphereLight(0xffffff, 0x445544, 0.85);
+  hemiLight.position.set(0, 400, 0);
+  scene.add(hemiLight);
+
+  // High-fidelity Sunlight
+  const sun = new THREE.DirectionalLight(0xfffaed, 2.0); // Bright sunny day
+  sun.position.set(250, 400, 150);
+  sun.castShadow = true;
+  sun.shadow.mapSize.width = 2048; // High-resolution shadows
+  sun.shadow.mapSize.height = 2048;
+  sun.shadow.camera.near = 0.5;
+  sun.shadow.camera.far = 1000;
+  sun.shadow.bias = -0.0004; // Precise bias to eliminate acne
+  const d = 350; // Widen shadow frustum for realistic city scale
+  sun.shadow.camera.left = -d;
+  sun.shadow.camera.right = d;
+  sun.shadow.camera.top = d;
+  sun.shadow.camera.bottom = -d;
+  scene.add(sun);
+
+  // Build MMORPG Nairobi City
+  buildStylizedCity();
+  buildCyberDrone();
+  spawnStylizedClouds();
+  
+  // Keyboard Events
+  window.addEventListener('keydown', e => { activeKeys[e.key.toLowerCase()] = true; });
+  window.addEventListener('keyup', e => {
+    activeKeys[e.key.toLowerCase()] = false;
+    if (e.key.toLowerCase() === 'v') {
+      cycleCamera();
+    }
+  });
+  
+  // Drag controls for orbit camera
+  let isDragging = false;
+  let prevMouseX = 0;
+  window.addEventListener('mousedown', e => {
+    if (cameraView === 'orbit') {
+      isDragging = true;
+      prevMouseX = e.clientX;
+    }
+  });
+  window.addEventListener('mousemove', e => {
+    if (isDragging && cameraView === 'orbit') {
+      orbitAngle += (e.clientX - prevMouseX) * 0.015;
+      prevMouseX = e.clientX;
+    }
+  });
+  window.addEventListener('mouseup', () => { isDragging = false; });
+  
+  window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+  
+  clock = new THREE.Clock();
+}
+
+// ── STYLIZED PBR TEXTURE GENERATORS ──────────────────────────
+function generatePBRNoiseTexture(type) {
+  const size = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+
+  const imgData = ctx.createImageData(size, size);
+  const data = imgData.data;
+
+  for (let i = 0; i < data.length; i += 4) {
+    const n = Math.random();
+    if (type === 'normal') {
+      const nX = (Math.random() - 0.5) * 45;
+      const nY = (Math.random() - 0.5) * 45;
+      data[i] = 128 + nX;   // R (X)
+      data[i+1] = 128 + nY; // G (Y)
+      data[i+2] = 255;      // B (Z)
+      data[i+3] = 255;
+    } else if (type === 'roughness') {
+      const r = 190 + n * 65;
+      data[i] = r; data[i+1] = r; data[i+2] = r;
+      data[i+3] = 255;
+    }
+  }
+  ctx.putImageData(imgData, 0, 0);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(16, 16);
+  return tex;
+}
+
+function createTilePBRMaterial(width, height, pos) {
+  const size = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+
+  const imgData = ctx.createImageData(size, size);
+  const data = imgData.data;
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const worldX = pos.x - width / 2 + (x / size) * width;
+      const worldZ = pos.z - height / 2 + ((size - y) / size) * height;
+      
+      const elev = getGroundElevation(worldX, worldZ);
+      
+      // Default lush green albedo
+      let r = 38, g = 90, b = 34;
+      
+      // Shorelines
+      const distToLake = Math.sqrt((worldX - (-280))**2 + (worldZ - 330)**2);
+      if (distToLake < 240) {
+        if (distToLake > 220) {
+          // Sun-bleached warm sand
+          r = 222; g = 199; b = 150;
+        } else {
+          // Turquoise marsh bank
+          r = 50; g = 135; b = 120;
+        }
+      }
+      
+      // Highways
+      const nearUhuru = Math.abs(worldX - (-80)) < 12;
+      const nearKenyatta = Math.abs(worldZ - 40) < 12;
+      if (nearUhuru || nearKenyatta) {
+        // Grainy asphalt gray
+        r = 60; g = 60; b = 63;
+      }
+      
+      // Mountain cliffs
+      if (worldX < -180 && elev > 12) {
+        // Brown-slate cliff rocks
+        r = 110; g = 95; b = 88;
+      }
+      
+      const noise = Math.random() * 16 - 8;
+      const idx = (y * size + x) * 4;
+      data[idx] = Math.max(0, Math.min(255, r + noise));
+      data[idx+1] = Math.max(0, Math.min(255, g + noise));
+      data[idx+2] = Math.max(0, Math.min(255, b + noise));
+      data[idx+3] = 255;
+    }
+  }
+  ctx.putImageData(imgData, 0, 0);
+
+  const albedoMap = new THREE.CanvasTexture(canvas);
+  const normalMap = generatePBRNoiseTexture('normal');
+  const roughnessMap = generatePBRNoiseTexture('roughness');
+
+  return new THREE.MeshStandardMaterial({
+    map: albedoMap,
+    normalMap: normalMap,
+    normalScale: new THREE.Vector2(0.45, 0.45),
+    roughnessMap: roughnessMap,
+    roughness: 0.85,
+    metalness: 0.05
+  });
+}
+
+// ── CUSTOM HIGH-FIDELITY MAP TILE LOADER ─────────────────────
+function createTileMesh(tx, ty, key) {
+  const lngMin = tile2lon(tx, ZOOM);
+  const lngMax = tile2lon(tx + 1, ZOOM);
+  const latMin = tile2lat(ty + 1, ZOOM);
+  const latMax = tile2lat(ty, ZOOM);
+  
+  const latC = (latMin + latMax) / 2;
+  const lngC = (lngMin + lngMax) / 2;
+  const pos = latLngToMeters(latC, lngC);
+  
+  const width = (lngMax - lngMin) * METERS_PER_LNG;
+  const height = (latMax - latMin) * METERS_PER_LAT;
+  
+  const geo = new THREE.PlaneGeometry(width, height, 16, 16);
+  
+  const posAttr = geo.attributes.position;
+  for (let i = 0; i < posAttr.count; i++) {
+    const vx = posAttr.getX(i);
+    const vy = posAttr.getY(i);
+    const worldX = pos.x + vx;
+    const worldZ = pos.z - vy;
+    const elev = getGroundElevation(worldX, worldZ);
+    posAttr.setZ(i, elev);
+  }
+  
+  geo.computeVertexNormals();
+  
+  // Custom high-fidelity PBR Material for the tile
+  const mat = createTilePBRMaterial(width, height, pos);
+  
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.set(pos.x, 0, pos.z);
+  mesh.receiveShadow = true;
+  mesh.castShadow = true;
+  scene.add(mesh);
+  
+  loadedTiles.set(key, { mesh, geometry: geo, material: mat });
+}
+
+function updateDynamicTiles() {
+  const tx = lon2tile(ds.lng, ZOOM);
+  const ty = lat2tile(ds.lat, ZOOM);
+  
+  if (tx === currentCenterTx && ty === currentCenterTy) return;
+  
+  currentCenterTx = tx;
+  currentCenterTy = ty;
+  
+  const visibleKeys = new Set();
+  
+  for (let dx = -TILE_RADIUS; dx <= TILE_RADIUS; dx++) {
+    for (let dy = -TILE_RADIUS; dy <= TILE_RADIUS; dy++) {
+      const targetTx = tx + dx;
+      const targetTy = ty + dy;
+      const key = `${targetTx},${targetTy}`;
+      visibleKeys.add(key);
+      
+      if (!loadedTiles.has(key)) {
+        createTileMesh(targetTx, targetTy, key);
+      }
+    }
+  }
+  
+  for (const [key, tile] of loadedTiles.entries()) {
+    if (!visibleKeys.has(key)) {
+      scene.remove(tile.mesh);
+      tile.geometry.dispose();
+      tile.material.dispose();
+      loadedTiles.delete(key);
+    }
+  }
+}
+
+// ── BUILD PROCEDURAL FANTASY CITY ASSETS ────────────────────
+function buildStylizedCity() {
+  // 1. Pristine Turquoise Lake
+  const lakeGeo = new THREE.PlaneGeometry(330, 190);
+  const lakeMat = new THREE.MeshPhongMaterial({
+    color: 0x26c6da,
+    emissive: 0x00363a,
+    shininess: 250,
+    specular: 0xffffff,
+    transparent: true,
+    opacity: 0.9,
+    side: THREE.DoubleSide
+  });
+  const lake = new THREE.Mesh(lakeGeo, lakeMat);
+  lake.rotation.x = -Math.PI / 2;
+  lake.position.set(-280, -6.5, 330);
+  scene.add(lake);
+  
+  // 2. KICC (The Grand Spire)
+  const kiccGroup = new THREE.Group();
+  const kiccY = getGroundElevation(145, 22);
+  kiccGroup.position.set(145, kiccY, 22);
+  
+  const terracottaMat = new THREE.MeshPhongMaterial({ color: 0xd87040, flatShading: true, shininess: 35 });
+  const goldMetal = new THREE.MeshStandardMaterial({ color: 0xffd700, metalness: 0.9, roughness: 0.1 });
+  const neonCyanMat = new THREE.MeshBasicMaterial({ color: 0xffeb3b });
+  
+  // Cylinder base podium
+  const podium = new THREE.Mesh(new THREE.CylinderGeometry(23, 25, 12, 12), terracottaMat);
+  podium.position.y = 6;
+  podium.castShadow = true;
+  kiccGroup.add(podium);
+  
+  // Core Spire Shaft
+  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(6, 8, 96, 12), terracottaMat);
+  shaft.position.y = 12 + 48;
+  shaft.castShadow = true;
+  kiccGroup.add(shaft);
+  
+  // Glowing blue runes wrapping vertically around shaft
+  const runeGeo = new THREE.CylinderGeometry(0.12, 0.12, 96, 6);
+  for (let r = 0; r < 4; r++) {
+    const ang = (r * Math.PI) / 2;
+    const rx = Math.cos(ang) * 7.1;
+    const rz = Math.sin(ang) * 7.1;
+    const rune = new THREE.Mesh(runeGeo, neonCyanMat);
+    rune.position.set(rx, 12 + 48, rz);
+    kiccGroup.add(rune);
+  }
+  
+  // Cone Roof
+  const cone = new THREE.Mesh(new THREE.ConeGeometry(7.5, 18, 12), terracottaMat);
+  cone.position.y = 12 + 96 + 9;
+  kiccGroup.add(cone);
+  
+  // Floating energy rings bobbing at the top
+  const ringGeo = new THREE.TorusGeometry(10.5, 0.35, 8, 24);
+  floatRing = new THREE.Mesh(ringGeo, neonCyanMat);
+  floatRing.rotation.x = Math.PI / 2;
+  floatRing.position.y = 12 + 96 + 18;
+  kiccGroup.add(floatRing);
+  
+  // Grand Beacon Energy Beam
+  const beamGeo = new THREE.CylinderGeometry(0.8, 10, 400, 16, 1, true);
+  const beamMat = new THREE.MeshBasicMaterial({
+    color: 0x00f0ff,
+    transparent: true,
+    opacity: 0.3,
+    side: THREE.DoubleSide,
+    depthWrite: false
+  });
+  beamLight = new THREE.Mesh(beamGeo, beamMat);
+  beamLight.position.y = 12 + 96 + 200;
+  kiccGroup.add(beamLight);
+  
+  scene.add(kiccGroup);
+  
+  // 3. Times Tower (Red Crystal Spire)
+  const timesGroup = new THREE.Group();
+  const timesY = getGroundElevation(312, 276);
+  timesGroup.position.set(312, timesY, 276);
+  
+  // Stretched double-pyramid crystal cluster
+  const crystalGeo = new THREE.CylinderGeometry(0, 11, 120, 5); // 5-sided cut
+  const crystalMat = new THREE.MeshPhongMaterial({
+    color: 0xff1744,
+    emissive: 0x560027,
+    shininess: 200,
+    specular: 0xffffff,
+    transparent: true,
+    opacity: 0.9,
+    flatShading: true
+  });
+  const crystalTop = new THREE.Mesh(crystalGeo, crystalMat);
+  crystalTop.position.y = 60;
+  crystalTop.castShadow = true;
+  timesGroup.add(crystalTop);
+  
+  const crystalBot = new THREE.Mesh(crystalGeo, crystalMat);
+  crystalBot.rotation.x = Math.PI;
+  crystalBot.position.y = 60;
+  timesGroup.add(crystalBot);
+  
+  // Golden orbiting orbital rings
+  const orbitRingGeo = new THREE.TorusGeometry(18, 0.5, 6, 24);
+  const tRing1 = new THREE.Mesh(orbitRingGeo, goldMetal);
+  tRing1.rotation.x = Math.PI/4;
+  tRing1.name = 'ring1';
+  timesGroup.add(tRing1);
+  
+  const tRing2 = new THREE.Mesh(orbitRingGeo, goldMetal);
+  tRing2.rotation.z = Math.PI/4;
+  tRing2.scale.set(0.85, 0.85, 0.85);
+  tRing2.name = 'ring2';
+  timesGroup.add(tRing2);
+  
+  scene.add(timesGroup);
+  
+  // 4. Nyayo House (Sleek Glass Monolith)
+  const nyayoGroup = new THREE.Group();
+  const nyayoY = getGroundElevation(-200, -22);
+  nyayoGroup.position.set(-200, nyayoY, -22);
+  
+  const monoMat = new THREE.MeshPhongMaterial({
+    color: 0xf5f5f5,
+    emissive: 0x3e2723,
+    shininess: 150,
+    specular: 0xffd700,
+    flatShading: true
+  });
+  const ny = new THREE.Mesh(new THREE.BoxGeometry(26, 96, 12), monoMat);
+  ny.position.y = 48;
+  ny.castShadow = true;
+  nyayoGroup.add(ny);
+  
+  // Neon cyan light bands running up sides of Nyayo Monolith
+  const sideRuneGeo = new THREE.BoxGeometry(0.4, 96, 0.4);
+  const sr1 = new THREE.Mesh(sideRuneGeo, neonCyanMat);
+  sr1.position.set(13.1, 48, 6.1);
+  const sr2 = sr1.clone(); sr2.position.x = -13.1;
+  nyayoGroup.add(sr1); nyayoGroup.add(sr2);
+  
+  scene.add(nyayoGroup);
+  
+  // 5. Procedural City Blocks grid
+  spawnFantasyCitySkyscrapers();
+  
+  // 6. Swaying Low-Poly Trees
+  spawnLowPolyTrees();
+  
+  // 7. Energy Highways & Hover Traffic
+  spawnHoverTraffic();
+  
+  // 8. Pedestrians
+  spawnLowPolyPedestrians();
+}
+
+function spawnFantasyCitySkyscrapers() {
+  const spacing = 70;
+  const colors = [0x2c105c, 0x1a0f30, 0x481157, 0x0e1b30];
+  
+  for (let bx = 0; bx < 6; bx++) {
+    for (let bz = -3; bz < 5; bz++) {
+      const wx = bx * spacing + 40;
+      const wz = bz * spacing - 120;
+      
+      if (Math.abs(wx - 145) < 35 && Math.abs(wz - 22) < 35) continue;
+      if (Math.abs(wx - 312) < 35 && Math.abs(wz - 276) < 35) continue;
+      
+      const height = 40 + Math.random() * 65;
+      const w = 12 + Math.random() * 8;
+      const d = 12 + Math.random() * 8;
+      const yBase = getGroundElevation(wx, wz);
+      
+      const bGroup = new THREE.Group();
+      bGroup.position.set(wx, yBase, wz);
+      
+      const designColor = colors[Math.floor(Math.random() * colors.length)];
+      const structure = new THREE.Mesh(
+        new THREE.BoxGeometry(w, height, d),
+        new THREE.MeshPhongMaterial({
+          color: designColor,
+          shininess: 90,
+          specular: 0x00ffff,
+          flatShading: true
+        })
+      );
+      structure.position.y = height/2;
+      structure.castShadow = true;
+      bGroup.add(structure);
+      
+      // Floating glowing energy crown at top
+      const crownGeo = new THREE.BoxGeometry(w + 0.5, 0.4, d + 0.5);
+      const crownMat = new THREE.MeshBasicMaterial({ color: 0xff00ff }); // Magenta crown
+      const crown = new THREE.Mesh(crownGeo, crownMat);
+      crown.position.y = height + 0.2;
+      bGroup.add(crown);
+      
+      scene.add(bGroup);
+      
+      buildingsList.push({
+        minX: wx - w / 2 - 1.0, maxX: wx + w / 2 + 1.0,
+        minZ: wz - d / 2 - 1.0, maxZ: wz + d / 2 + 1.0,
+        minY: yBase, maxY: yBase + height
+      });
+    }
+  }
+}
+
+function spawnLowPolyTrees() {
+  const trunkGeo = new THREE.CylinderGeometry(0.12, 0.3, 4, 5); // 5-sided
+  const trunkMat = new THREE.MeshPhongMaterial({ color: 0x4e342e, flatShading: true });
+  
+  const leavesColors = [
+    0xffb7c5, // Cherry Blossom Pink
+    0xffb300, // Golden Autumn Orange
+    0x2ecc71, // Vibrant Summer Green
+    0x00e5ff, // Crystal Cyan
+    0xff7043  // Warm Sunset Red
+  ];
+  const leavesGeo = new THREE.DodecahedronGeometry(1.6);
+  
+  function createTree(tx, tz) {
+    const gY = getGroundElevation(tx, tz);
+    if (gY < -5) return;
+    
+    const tg = new THREE.Group();
+    tg.position.set(tx, gY, tz);
+    
+    const trunk = new THREE.Mesh(trunkGeo, trunkMat);
+    trunk.position.y = 2.0;
+    tg.add(trunk);
+    
+    const fGroup = new THREE.Group();
+    fGroup.position.y = 4.0;
+    
+    const treeColor = leavesColors[Math.floor(Math.random() * leavesColors.length)];
+    const foliageMat = new THREE.MeshPhongMaterial({ color: treeColor, flatShading: true, shininess: 10 });
+    
+    for (let c = 0; c < 2; c++) {
+      const leaves = new THREE.Mesh(leavesGeo, foliageMat);
+      leaves.position.set((Math.random()-0.5)*0.8, Math.random()*0.8, (Math.random()-0.5)*0.8);
+      leaves.scale.set(1, 1 + Math.random()*0.3, 1);
+      fGroup.add(leaves);
+    }
+    tg.add(fGroup);
+    scene.add(tg);
+    
+    trees.push({
+      group: tg,
+      foliage: fGroup,
+      offset: Math.random() * Math.PI * 2,
+      speed: 1.0 + Math.random() * 0.8
+    });
+  }
+  
+  // Park clusters
+  for (let i = 0; i < 90; i++) {
+    const rAngle = Math.random() * Math.PI * 2;
+    const rDist = 90 + Math.random() * 130;
+    const tx = -280 + Math.cos(rAngle) * rDist;
+    const tz = 330 + Math.sin(rAngle) * rDist;
+    createTree(tx, tz);
+  }
+}
+
+function spawnHoverTraffic() {
+  // Energy Highways planes
+  const energyTrackMat = new THREE.MeshBasicMaterial({
+    color: 0x00f0ff,
+    transparent: true,
+    opacity: 0.12,
+    side: THREE.DoubleSide
+  });
+  
+  // N-S energy road
+  const nsRoad = new THREE.Mesh(new THREE.PlaneGeometry(16, 900), energyTrackMat);
+  nsRoad.rotation.x = -Math.PI / 2;
+  nsRoad.position.set(-80, getGroundElevation(-80, 0) + 0.15, 0);
+  scene.add(nsRoad);
+  
+  // E-W energy road
+  const ewRoad = new THREE.Mesh(new THREE.PlaneGeometry(900, 16), energyTrackMat);
+  ewRoad.rotation.x = -Math.PI / 2;
+  ewRoad.position.set(0, getGroundElevation(0, 40) + 0.15, 40);
+  scene.add(ewRoad);
+
+  // Hovercraft chassis geometries
+  const bodyGeo = new THREE.BoxGeometry(1.8, 0.5, 1.0);
+  const canopyGeo = new THREE.SphereGeometry(0.42, 8, 8);
+  const glassMat = new THREE.MeshPhongMaterial({ color: 0x00ffff, shininess: 200, transparent: true, opacity: 0.7 });
+  
+  // Hover Matatu geometry (Mini-spaceships!)
+  const matatuBodyGeo = new THREE.BoxGeometry(3.5, 1.1, 1.4);
+  const glowPink = new THREE.MeshBasicMaterial({ color: 0xff00ff });
+  const thrusterFireGeo = new THREE.ConeGeometry(0.25, 0.8, 6);
+  const fireMat = new THREE.MeshBasicMaterial({ color: 0xffaa00, transparent: true, opacity: 0.8 });
+
+  function buildHovercraft(isMatatu) {
+    const g = new THREE.Group();
+    
+    if (isMatatu) {
+      // Spaceship minibus
+      const chassis = new THREE.Mesh(matatuBodyGeo, new THREE.MeshPhongMaterial({ color: 0x0d031c, shininess: 100 }));
+      chassis.position.y = 0.55;
+      g.add(chassis);
+      
+      const neonStripe = new THREE.Mesh(new THREE.BoxGeometry(3.52, 0.2, 1.42), glowPink);
+      neonStripe.position.y = 0.35;
+      g.add(neonStripe);
+      
+      // Dual rocket exhaust fire at the rear
+      const thrusterL = new THREE.Mesh(thrusterFireGeo, fireMat);
+      thrusterL.rotation.z = Math.PI / 2;
+      thrusterL.position.set(-2.0, 0.45, 0.4);
+      const thrusterR = thrusterL.clone();
+      thrusterR.position.z = -0.4;
+      g.add(thrusterL); g.add(thrusterR);
+      
+      // Floating glowing neon pads underneath
+      const padGeo = new THREE.BoxGeometry(0.8, 0.05, 0.8);
+      const padMat = new THREE.MeshBasicMaterial({ color: 0x00ffff });
+      const pad1 = new THREE.Mesh(padGeo, padMat);
+      pad1.position.set(-1.0, 0.0, 0);
+      const pad2 = pad1.clone();
+      pad2.position.x = 1.0;
+      g.add(pad1); g.add(pad2);
+    } else {
+      // Normal hovercar
+      const bodyColor = [0xff00aa, 0x00ffff, 0x7b00ff][Math.floor(Math.random()*3)];
+      const chassis = new THREE.Mesh(bodyGeo, new THREE.MeshPhongMaterial({ color: bodyColor, shininess: 120 }));
+      chassis.position.y = 0.25;
+      g.add(chassis);
+      
+      const canopy = new THREE.Mesh(canopyGeo, glassMat);
+      canopy.position.set(0.1, 0.5, 0);
+      canopy.scale.set(1.2, 0.6, 1.0);
+      g.add(canopy);
+      
+      // Rear engine jet fire cone
+      const jet = new THREE.Mesh(thrusterFireGeo, fireMat);
+      jet.rotation.z = Math.PI / 2;
+      jet.position.set(-1.1, 0.25, 0);
+      jet.scale.set(0.6, 0.6, 0.6);
+      g.add(jet);
+    }
+    
+    return g;
+  }
+
+  for (let i = 0; i < 22; i++) {
+    const isUhuru = Math.random() > 0.5;
+    const isMatatu = Math.random() > 0.6; // 40% Rocket Matatus
+    const mesh = buildHovercraft(isMatatu);
+    scene.add(mesh);
+    
+    let path = {};
+    if (isUhuru) {
+      const isNorth = Math.random() > 0.5;
+      const rx = isNorth ? -84 : -76;
+      const rz = (Math.random() - 0.5) * 800;
+      // Float at y = 1.5m above ground elevation
+      mesh.position.set(rx, getGroundElevation(rx, rz) + 1.5, rz);
+      mesh.rotation.y = isNorth ? Math.PI : 0;
+      path = {
+        mesh, road: 'uhuru', rx, rz,
+        dir: isNorth ? -1 : 1,
+        speed: 15 + Math.random() * 8
+      };
+    } else {
+      const isEast = Math.random() > 0.5;
+      const rz = isEast ? 44 : 36;
+      const rx = (Math.random() - 0.5) * 800;
+      mesh.position.set(rx, getGroundElevation(rx, rz) + 1.5, rz);
+      mesh.rotation.y = isEast ? Math.PI / 2 : -Math.PI / 2;
+      path = {
+        mesh, road: 'kenyatta', rx, rz,
+        dir: isEast ? 1 : -1,
+        speed: 14 + Math.random() * 7
+      };
+    }
+    traffic.push(path);
+  }
+}
+
+function spawnLowPolyPedestrians() {
+  const torsoMat = new THREE.MeshPhongMaterial({ color: 0x7b00ff, flatShading: true });
+  
+  function buildPed() {
+    const g = new THREE.Group();
+    // Head cube
+    const head = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.3, 0.3), new THREE.MeshPhongMaterial({ color: 0xffdbac }));
+    head.position.y = 1.5;
+    g.add(head);
+    
+    // Low-poly diamond-like body
+    const body = new THREE.Mesh(new THREE.OctahedronGeometry(0.4), torsoMat);
+    body.scale.set(0.8, 1.2, 0.8);
+    body.position.y = 1.05;
+    g.add(body);
+    
+    // Legs
+    const lLeg = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.6, 0.1), new THREE.MeshPhongMaterial({ color: 0x0c041c }));
+    lLeg.position.set(-0.08, 0.3, 0);
+    const rLeg = lLeg.clone();
+    rLeg.position.x = 0.08;
+    g.add(lLeg); g.add(rLeg);
+    
+    return { group: g, lLeg, rLeg };
+  }
+  
+  for (let i = 0; i < 24; i++) {
+    const p = buildPed();
+    scene.add(p.group);
+    
+    const rAng = Math.random() * Math.PI * 2;
+    const rDist = 70 + Math.random() * 90;
+    const px = -280 + Math.cos(rAng) * rDist;
+    const pz = 330 + Math.sin(rAng) * rDist;
+    
+    p.group.position.set(px, getGroundElevation(px, pz), pz);
+    
+    pedestrians.push({
+      ...p, px, pz,
+      angle: Math.random() * Math.PI * 2,
+      speed: 1.1 + Math.random() * 0.4,
+      phase: Math.random() * Math.PI * 2
+    });
+  }
+}
+
+// ── BUILD CYBER HOVER-DRONE ──────────────────────────────────
+function buildCyberDrone() {
+  droneModel = new THREE.Group();
+  droneModel.position.set(ds.x, getGroundElevation(ds.x, ds.z) + ds.alt, ds.z);
+  
+  const carbonMat = new THREE.MeshPhongMaterial({ color: 0xffffff, shininess: 200, specular: 0xffffff }); // Ivory body
+  const trimMat = new THREE.MeshPhongMaterial({ color: 0xffd700, shininess: 250, specular: 0xffffff }); // Gold trim
+  const ringMat = new THREE.MeshBasicMaterial({ color: 0x00f0ff, transparent: true, opacity: 0.8 }); // Magic thrusters
+  
+  // Sleek Aerodynamic Fuselage
+  const fuselage = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.45, 0.18, 5), carbonMat);
+  fuselage.scale.set(1.5, 1, 1);
+  fuselage.position.y = 0.08;
+  fuselage.castShadow = true;
+  droneModel.add(fuselage);
+  
+  // Forward cabin visor
+  const visor = new THREE.Mesh(new THREE.SphereGeometry(0.32, 6, 6), new THREE.MeshPhongMaterial({ color: 0xff007f, shininess: 250 }));
+  visor.scale.set(1.4, 0.6, 1.0);
+  visor.position.set(0.12, 0.16, 0);
+  droneModel.add(visor);
+  
+  // Searchlight cone
+  searchlight = new THREE.SpotLight(0x00f0ff, 0, 80, Math.PI / 4, 0.6, 1);
+  searchlight.castShadow = true;
+  searchlight.shadow.mapSize.width = 512;
+  searchlight.shadow.mapSize.height = 512;
+  searchlight.position.set(0, -0.05, 0);
+  searchlight.target.position.set(0, -10, 0);
+  droneModel.add(searchlight);
+  droneModel.add(searchlight.target);
+
+  // 4 Cyber Thruster Rings
+  const armLen = 1.3;
+  const angles = [Math.PI/4, 3*Math.PI/4, 5*Math.PI/4, 7*Math.PI/4];
+  
+  angles.forEach((ang) => {
+    const ax = Math.cos(ang) * armLen;
+    const az = Math.sin(ang) * armLen;
+    
+    // Arm
+    const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, armLen, 5), carbonMat);
+    arm.position.set(ax / 2, 0.04, az / 2);
+    const direction = new THREE.Vector3(ax, 0, az).normalize();
+    const upVec = new THREE.Vector3(0, 1, 0);
+    const quat = new THREE.Quaternion().setFromUnitVectors(upVec, direction);
+    arm.quaternion.copy(quat);
+    droneModel.add(arm);
+    
+    // Thruster body ring
+    const tRingBody = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 0.16, 8), carbonMat);
+    tRingBody.position.set(ax, 0.05, az);
+    droneModel.add(tRingBody);
+    
+    // Glowing internal ion energy ring
+    const ionRing = new THREE.Mesh(new THREE.TorusGeometry(0.12, 0.03, 6, 16), ringMat);
+    ionRing.rotation.x = Math.PI / 2;
+    ionRing.position.set(ax, 0.05, az);
+    droneModel.add(ionRing);
+    engineRings.push(ionRing);
+  });
+  
+  // Landing gears struts
+  const legOffset = [[-0.2, -0.2], [-0.2, 0.2], [0.2, -0.2], [0.2, 0.2]];
+  legOffset.forEach(([lx, lz]) => {
+    const strut = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.32), carbonMat);
+    strut.position.set(lx, -0.16, lz);
+    strut.rotation.z = lx > 0 ? 0.15 : -0.15;
+    droneModel.add(strut);
+  });
+  
+  const leftSkid = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.75), carbonMat);
+  leftSkid.rotation.x = Math.PI / 2;
+  leftSkid.position.set(-0.24, -0.32, 0);
+  droneModel.add(leftSkid);
+  
+  const rightSkid = leftSkid.clone();
+  rightSkid.position.x = 0.24;
+  droneModel.add(rightSkid);
+  
+  scene.add(droneModel);
+  
+  // Setup Ribbon trail renderers for thrusters
+  for (let i = 0; i < 4; i++) {
+    const tGeo = new THREE.BufferGeometry();
+    const positions = new Float32Array(maxTrailPoints * 3);
+    tGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    
+    const tMat = new THREE.LineBasicMaterial({
+      color: 0x00f0ff,
+      linewidth: 3,
+      transparent: true,
+      opacity: 0.65
+    });
+    
+    const line = new THREE.Line(tGeo, tMat);
+    scene.add(line);
+    
+    trailGeometries.push(tGeo);
+    trailMeshes.push(line);
+    trailHistories.push([]);
+  }
+
+  // Setup low ground dust particles
+  const dustGeo = new THREE.BoxGeometry(0.24, 0.03, 0.24);
+  const dustMat = new THREE.MeshBasicMaterial({ color: 0x00f0ff, transparent: true, opacity: 0 });
+  for (let p = 0; p < 20; p++) {
+    const dMesh = new THREE.Mesh(dustGeo, dustMat.clone());
+    scene.add(dMesh);
+    dustParticles.push({
+      mesh: dMesh,
+      age: 0,
+      life: 0,
+      vx: 0, vz: 0
+    });
+  }
+}
+
+// ── STYLIZED FLUFFY CLOUDS ──────────────────────────────────
+function spawnStylizedClouds() {
+  const cloudMat = new THREE.MeshPhongMaterial({
+    color: 0xffffff,
+    emissive: 0xddeeff,
+    shininess: 0,
+    flatShading: true,
+    transparent: true,
+    opacity: 0.85
+  });
+  
+  const sphereGeo = new THREE.SphereGeometry(1, 6, 6);
+  
+  for (let i = 0; i < 15; i++) {
+    const cg = new THREE.Group();
+    const cx = (Math.random() - 0.5) * 800;
+    const cz = (Math.random() - 0.5) * 800;
+    const cy = 120 + Math.random() * 60;
+    cg.position.set(cx, cy, cz);
+    
+    const numSpheres = 3 + Math.floor(Math.random() * 4);
+    for (let s = 0; s < numSpheres; s++) {
+      const sp = new THREE.Mesh(sphereGeo, cloudMat);
+      const scaleX = 8 + Math.random() * 12;
+      const scaleY = 4 + Math.random() * 6;
+      const scaleZ = 6 + Math.random() * 8;
+      sp.scale.set(scaleX, scaleY, scaleZ);
+      sp.position.set(
+        (Math.random() - 0.5) * 12,
+        (Math.random() - 0.5) * 3,
+        (Math.random() - 0.5) * 8
+      );
+      cg.add(sp);
+    }
+    
+    scene.add(cg);
+    clouds.push({
+      group: cg,
+      speed: 2.0 + Math.random() * 4.0
+    });
+  }
+}
+
+// ── FLIGHT PHYSICS LOOP ─────────────────────────────────────
+function updateFlightPhysics(dt) {
+  let fwd = 0, side = 0, up = 0, turn = 0;
+  
+  if (activeKeys['w'] || activeKeys['arrowup']) fwd = 1;
+  if (activeKeys['s'] || activeKeys['arrowdown']) fwd = -1;
+  if (activeKeys['a']) side = -1;
+  if (activeKeys['d']) side = 1;
+  
+  if (activeKeys['q']) up = 1;
+  if (activeKeys['e']) up = -1;
+  
+  if (activeKeys['arrowleft']) turn = 1;
+  if (activeKeys['arrowright']) turn = -1;
+  
+  if (activeConnection && activeConnection.open) {
+    fwd = mobileInputs.fwd;
+    side = mobileInputs.side;
+    up = mobileInputs.up;
+    turn = mobileInputs.turn;
+  }
+  
+  const mode = ds.alt <= 0.65 ? 'DISARMED' : 'STABILIZE';
+  const hudStatus = document.getElementById('hud-status');
+  hudStatus.textContent = mode;
+  hudStatus.className = 'hud-status-badge ' + (mode === 'STABILIZE' ? 'badge-stabilize' : 'badge-disarmed');
+  
+  // Pulse hover engine thruster rings
+  engineRings.forEach((ring, r) => {
+    const pulseFactor = mode === 'STABILIZE' ? 1.0 + Math.sin(clock.getElapsedTime()*14 + r)*0.2 : 0.2;
+    ring.scale.set(pulseFactor, pulseFactor, 1.0);
+  });
+  
+  // Directional turns
+  ds.hdg += turn * YAW_SPEED * dt * 2.0; // Doubled rotation speed
+  
+  // Smooth bank turns
+  const targetTiltF = fwd * 0.35;
+  const targetTiltS = -side * 0.3;
+  ds.tiltF += (targetTiltF - ds.tiltF) * 8.5 * dt;
+  ds.tiltS += (targetTiltS - ds.tiltS) * 8.5 * dt;
+  
+  // Convert acceleration to global axes
+  const accelMagF = fwd * ACCEL * 2.0; // Doubled acceleration
+  const accelMagS = side * ACCEL * 2.0;
+  const accX = Math.sin(ds.hdg) * accelMagF + Math.cos(ds.hdg) * accelMagS;
+  const accZ = -Math.cos(ds.hdg) * accelMagF + Math.sin(ds.hdg) * accelMagS;
+  const accY = up * CLIMB_SPEED * 2.0;
+  
+  vx += accX * dt;
+  vz += accZ * dt;
+  vy += accY * dt;
+  
+  // Drag dampening
+  vx *= (1 - DRAG);
+  vz *= (1 - DRAG);
+  vy *= (1 - DRAG);
+  
+  // Update positions with obstacle collisions
+  const nextX = ds.x + vx * dt;
+  const nextZ = ds.z + vz * dt;
+  const gElevation = getGroundElevation(nextX, nextZ);
+  const absoluteY = gElevation + ds.alt;
+  
+  let hit = false;
+  for (const b of buildingsList) {
+    if (nextX >= b.minX && nextX <= b.maxX &&
+        nextZ >= b.minZ && nextZ <= b.maxZ &&
+        absoluteY <= b.maxY) {
+      hit = true;
+      break;
+    }
+  }
+  
+  if (!hit) {
+    ds.x = nextX;
+    ds.z = nextZ;
+    ds.x = Math.max(-480, Math.min(480, ds.x));
+    ds.z = Math.max(-480, Math.min(480, ds.z));
+    
+    const coord = metersToLatLng(ds.x, ds.z);
+    ds.lat = coord.lat;
+    ds.lng = coord.lng;
+  } else {
+    // Bounce physics
+    vx = -vx * 0.4;
+    vz = -vz * 0.4;
+    playCollisionTone();
+  }
+  
+  // Altitude limit calculations
+  ds.alt = Math.max(0.6, ds.alt + vy * dt);
+  if (ds.alt <= 0.6) {
+    ds.alt = 0.6;
+    vy = 0;
+  }
+  
+  // Position drone mesh
+  droneModel.position.set(ds.x, getGroundElevation(ds.x, ds.z) + ds.alt, ds.z);
+  droneModel.rotation.set(0, -ds.hdg, 0);
+  droneModel.rotateX(ds.tiltF);
+  droneModel.rotateZ(ds.tiltS);
+  
+  // Downward Searchlight cone spotlight
+  if (ds.alt < 30 && mode === 'STABILIZE') {
+    searchlight.intensity = 3.5 * (1 - ds.alt / 30);
+  } else {
+    searchlight.intensity = 0;
+  }
+  
+  // Particle ground wash
+  const groundWash = ds.alt < 15 && mode === 'STABILIZE';
+  const groundY = getGroundElevation(ds.x, ds.z);
+  
+  dustParticles.forEach(part => {
+    if (groundWash) {
+      if (part.age <= 0) {
+        const rAng = Math.random() * Math.PI * 2;
+        const rRad = 0.4 + Math.random() * 2.0;
+        part.mesh.position.set(ds.x + Math.cos(rAng)*rRad, groundY + 0.15, ds.z + Math.sin(rAng)*rRad);
+        part.vx = Math.cos(rAng) * (5 + Math.random() * 4);
+        part.vz = Math.sin(rAng) * (5 + Math.random() * 4);
+        part.life = 0.35 + Math.random() * 0.4;
+        part.age = part.life;
+      } else {
+        part.mesh.position.x += part.vx * dt;
+        part.mesh.position.z += part.vz * dt;
+        part.mesh.position.y = getGroundElevation(part.mesh.position.x, part.mesh.position.z) + 0.15;
+        part.age -= dt;
+        part.mesh.material.opacity = (part.age / part.life) * 0.55;
+      }
+    } else {
+      part.mesh.material.opacity = 0;
+      part.age = 0;
+    }
+  });
+
+  // Update Ribbon Trails
+  updateRibbonTrails();
+}
+
+function updateRibbonTrails() {
+  const localThrusterPos = [
+    new THREE.Vector3(0.9, 0.05, 0.9),
+    new THREE.Vector3(-0.9, 0.05, 0.9),
+    new THREE.Vector3(-0.9, 0.05, -0.9),
+    new THREE.Vector3(0.9, 0.05, -0.9)
+  ];
+  
+  localThrusterPos.forEach((localPos, idx) => {
+    const worldPos = localPos.clone().applyMatrix4(droneModel.matrixWorld);
+    
+    const history = trailHistories[idx];
+    history.push(worldPos);
+    if (history.length > maxTrailPoints) {
+      history.shift();
+    }
+    
+    const geo = trailGeometries[idx];
+    const posAttr = geo.attributes.position;
+    
+    for (let i = 0; i < maxTrailPoints; i++) {
+      const point = history[i] || worldPos;
+      posAttr.setXYZ(i, point.x, point.y, point.z);
+    }
+    posAttr.needsUpdate = true;
+  });
+}
+
+function playCollisionTone() {
+  if (!soundContext) return;
+  const osc = soundContext.createOscillator();
+  const gain = soundContext.createGain();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(150, soundContext.currentTime);
+  osc.frequency.linearRampToValueAtTime(40, soundContext.currentTime + 0.35);
+  gain.gain.setValueAtTime(0.3, soundContext.currentTime);
+  gain.gain.linearRampToValueAtTime(0.01, soundContext.currentTime + 0.35);
+  osc.connect(gain);
+  gain.connect(soundContext.destination);
+  osc.start();
+  osc.stop(soundContext.currentTime + 0.35);
+}
+
+// ── CAMERA LOOP ─────────────────────────────────────────────
+function cycleCamera() {
+  if (cameraView === 'follow') {
+    cameraView = 'fpv';
+    document.getElementById('hud-cam-mode').textContent = '1ST PERSON';
+  } else if (cameraView === 'fpv') {
+    cameraView = 'orbit';
+    document.getElementById('hud-cam-mode').textContent = 'ORBIT CAM';
+  } else {
+    cameraView = 'follow';
+    document.getElementById('hud-cam-mode').textContent = 'FOLLOW CAM';
+  }
+}
+
+function updateCamera() {
+  const gY = getGroundElevation(ds.x, ds.z);
+  const droneY = gY + ds.alt;
+  
+  if (cameraView === 'follow') {
+    const dist = 11.5;
+    const h = 4.2;
+    const tCamX = ds.x - Math.sin(ds.hdg) * dist;
+    const tCamZ = ds.z + Math.cos(ds.hdg) * dist;
+    const tCamY = droneY + h;
+    
+    camera.position.x += (tCamX - camera.position.x) * 0.08;
+    camera.position.z += (tCamZ - camera.position.z) * 0.08;
+    camera.position.y += (tCamY - camera.position.y) * 0.08;
+    camera.lookAt(new THREE.Vector3(ds.x, droneY + 0.5, ds.z));
+  } else if (cameraView === 'fpv') {
+    const lookDir = new THREE.Vector3(
+      ds.x + Math.sin(ds.hdg) * 30,
+      droneY - 1.5,
+      ds.z - Math.cos(ds.hdg) * 30
+    );
+    camera.position.set(ds.x + Math.sin(ds.hdg) * 0.4, droneY, ds.z - Math.cos(ds.hdg) * 0.4);
+    camera.lookAt(lookDir);
+  } else if (cameraView === 'orbit') {
+    const dist = 15;
+    const h = 4.5;
+    camera.position.set(
+      ds.x + Math.sin(orbitAngle) * dist,
+      droneY + h,
+      ds.z + Math.cos(orbitAngle) * dist
+    );
+    camera.lookAt(new THREE.Vector3(ds.x, droneY, ds.z));
+  }
+}
+
+// ── PROJECT LANDMARKS SCREEN COORDINATES ────────────────────
+function projectLandmarkTags() {
+  const labels = [
+    { id: 'lbl-kicc', pos: new THREE.Vector3(145, getGroundElevation(145,22)+132, 22) },
+    { id: 'lbl-times', pos: new THREE.Vector3(312, getGroundElevation(312,276)+136, 276) }
+  ];
+  
+  labels.forEach(tag => {
+    const el = document.getElementById(tag.id);
+    const pos = tag.pos.clone();
+    
+    // Project to NDC (Normalized Device Coordinates)
+    pos.project(camera);
+    
+    // Check if label is behind camera frustum
+    if (pos.z > 1) {
+      el.style.display = 'none';
+      return;
+    }
+    
+    // Convert to CSS absolute pixels coordinates
+    const sx = (pos.x * 0.5 + 0.5) * window.innerWidth;
+    const sy = (-(pos.y * 0.5 - 0.5)) * window.innerHeight;
+    
+    el.style.display = 'block';
+    el.style.left = `${sx}px`;
+    el.style.top = `${sy}px`;
+  });
+}
+
+// ── ANIMATION LOOP ──────────────────────────────────────────
+function animate() {
+  if (!isLaunched) return;
+  
+  requestAnimationFrame(animate);
+  
+  const dt = Math.min(0.03, clock.getDelta());
+  const time = clock.getElapsedTime();
+  
+  // 1. Terrain generation
+  updateDynamicTiles();
+  
+  // 2. Flight dynamics
+  updateFlightPhysics(dt);
+  
+  // 3. Spire rotations (MMO Orbit rings bobs)
+  if (floatRing) {
+    floatRing.rotation.z += 0.9 * dt;
+    floatRing.position.y = 12 + 96 + 18 + Math.sin(time * 2.2) * 1.4;
+  }
+  
+  // Times tower ring rotations
+  const timesGrp = scene.getObjectByProperty('type', 'Group'); // reference search
+  scene.traverse(node => {
+    if (node.name === 'ring1') node.rotation.z += 0.8 * dt;
+    if (node.name === 'ring2') node.rotation.y -= 0.6 * dt;
+  });
+  
+  // 4. Traffic displacements
+  traffic.forEach(car => {
+    if (car.road === 'uhuru') {
+      car.rz += car.dir * car.speed * dt;
+      if (car.rz > 450) car.rz = -450;
+      if (car.rz < -450) car.rz = 450;
+      car.mesh.position.set(car.rx, getGroundElevation(car.rx, car.rz) + 1.2, car.rz);
+    } else {
+      car.rx += car.dir * car.speed * dt;
+      if (car.rx > 450) car.rx = -450;
+      if (car.rx < -450) car.rx = 450;
+      car.mesh.position.set(car.rx, getGroundElevation(car.rx, car.rz) + 1.2, car.rz); // wrap
+    }
+  });
+  
+  // 5. Pedestrian legs swinging
+  pedestrians.forEach(p => {
+    p.px += Math.sin(p.angle) * p.speed * dt;
+    p.pz += Math.cos(p.angle) * p.speed * dt;
+    
+    const dLake = Math.sqrt((p.px + 280)**2 + (p.pz - 330)**2);
+    if (dLake > 220 || dLake < 92) {
+      p.angle += Math.PI * 0.5 + Math.random() * Math.PI;
+    }
+    
+    p.group.position.set(p.px, getGroundElevation(p.px, p.pz), p.pz);
+    p.group.rotation.y = p.angle;
+    
+    const phaseVal = Math.sin(time * 8.5 + p.phase) * 0.55;
+    p.lLeg.rotation.x = phaseVal;
+    p.rLeg.rotation.x = -phaseVal;
+  });
+  
+  // 6. Forest wind sway
+  trees.forEach(t => {
+    const sway = Math.sin(time * t.speed + t.offset) * 0.04;
+    t.foliage.rotation.z = sway;
+    t.foliage.rotation.x = sway * 0.45;
+  });
+  
+  // 7. Camera views
+  updateCamera();
+  
+  // 8. 3D Project HUD tags
+  projectLandmarkTags();
+  
+  // 8.5. Stylized Cloud drifting
+  clouds.forEach(c => {
+    c.group.position.x += c.speed * dt;
+    if (c.group.position.x > 500) {
+      c.group.position.x = -500;
+    }
+  });
+  
+  // 9. WebGL Render pass
+  renderer.render(scene, camera);
+  
+  // 10. Telemetry updates
+  updateHUD();
+}
+
+function updateHUD() {
+  const currentSpeed = Math.sqrt(vx*vx + vy*vy + vz*vz);
+  const hdgDeg = (((ds.hdg * 180 / Math.PI) % 360) + 360) % 360;
+  
+  document.getElementById('hud-alt').textContent = ds.alt.toFixed(1) + ' m';
+  document.getElementById('hud-spd').textContent = currentSpeed.toFixed(1) + ' m/s';
+  document.getElementById('hud-hdg').textContent = Math.round(hdgDeg) + '°';
+  document.getElementById('hud-lat').textContent = ds.lat.toFixed(5);
+  document.getElementById('hud-lng').textContent = ds.lng.toFixed(5);
+  
+  document.getElementById('hud-alt-fill').style.height = Math.min(100, ds.alt * 1.5) + '%';
+  document.getElementById('hud-compass-needle').style.transform = `rotate(${-ds.hdg}rad)`;
+}
+
+// ── P2P CLIENT CONTROLLER (MOBILE DEVICE) ───────────────────
+const urlParams = new URLSearchParams(window.location.search);
+const ctrlId = urlParams.get('control');
+if (ctrlId) {
+  document.getElementById('launcher-screen').style.display = 'none';
+  document.getElementById('sim-container').style.display = 'none';
+  document.getElementById('labels-container').style.display = 'none';
+  document.getElementById('mobile-controller').style.display = 'flex';
+  
+  initMobileLink(ctrlId);
+}
+
+function initMobileLink(targetId) {
+  const peerClient = new Peer();
+  let conn = null;
+  const statusEl = document.getElementById('m-conn-status');
+  
+  statusEl.textContent = 'LINKING TO DESKTOP...';
+  statusEl.className = 'm-conn-indicator m-disconnected';
+  
+  peerClient.on('open', (id) => {
+    conn = peerClient.connect(targetId);
+    
+    conn.on('open', () => {
+      statusEl.textContent = 'LINK ACTIVE — STEER TOWARDS DESKTOP';
+      statusEl.className = 'm-conn-indicator m-connected';
+      document.getElementById('btn-gyro-auth').style.display = 'none';
+      document.getElementById('m-gyro-visual').style.display = 'flex';
+      
+      setupGyroscopeTransmitter(conn);
+    });
+    
+    conn.on('close', () => {
+      statusEl.textContent = 'DISCONNECTED';
+      statusEl.className = 'm-conn-indicator m-disconnected';
+      document.getElementById('btn-gyro-auth').style.display = 'block';
+      document.getElementById('m-gyro-visual').style.display = 'none';
+    });
+  });
+}
+
+function requestGyroAuth() {
+  if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+    DeviceOrientationEvent.requestPermission()
+      .then(res => {
+        if (res === 'granted') {
+          alert('Gyro authorized! Awaiting Peer connection...');
+        } else {
+          alert('Permission denied.');
+        }
+      })
+      .catch(console.error);
+  } else {
+    alert('Browser gyro ready.');
+  }
+}
+
+function setupGyroscopeTransmitter(conn) {
+  const outputs = { fwd: 0, side: 0, up: 1.0, turn: 0 }; // Default cruise engine climb throttle
+  
+  // Store default offsets to calibrate on initial connection event
+  let calibrated = false;
+  let baseBeta = 0;
+  let baseGamma = 0;
+  
+  window.addEventListener('deviceorientation', (e) => {
+    let b = e.beta;   // Pitch front/back (-180 to 180)
+    let g = e.gamma;  // Roll left/right (-90 to 90)
+    
+    if (!calibrated && b !== null) {
+      baseBeta = b;
+      baseGamma = g;
+      calibrated = true;
+    }
+    
+    const pitch = b - baseBeta;
+    const roll = g - baseGamma;
+    
+    // Scale -35 to 35 deg down to -1 to 1 limits
+    outputs.fwd = Math.max(-1, Math.min(1, pitch / 35));
+    outputs.side = Math.max(-1, Math.min(1, roll / 35));
+    
+    // Visual mobile calibration confirmation element
+    const visualBall = document.getElementById('m-gyro-ball');
+    const visualBox = document.getElementById('m-gyro-visual');
+    visualBox.style.transform = `rotate(${-roll}deg)`;
+    
+    const bx = Math.max(-35, Math.min(35, roll)) / 35 * 40;
+    const by = Math.max(-35, Math.min(35, pitch)) / 35 * 40;
+    visualBall.style.left = `calc(50% - 10px + ${bx}px)`;
+    visualBall.style.top = `calc(50% - 10px + ${by}px)`;
+    
+    sendGyroData();
+  });
+  
+  // Basic touch triggers on phone background screen to handle ascending/descending
+  window.addEventListener('touchstart', (e) => {
+    // Touch top half to climb, bottom half to descend
+    const touchY = e.touches[0].clientY;
+    if (touchY < window.innerHeight / 2) {
+      outputs.up = 1.0;
+    } else {
+      outputs.up = -1.0;
+    }
+    sendGyroData();
+  });
+  
+  window.addEventListener('touchend', () => {
+    outputs.up = 0.0;
+    sendGyroData();
+  });
+
+  function sendGyroData() {
+    if (conn && conn.open) {
+      conn.send({
+        type: 'controls',
+        ...outputs
+      });
+    }
+  }
+}
+</script>
+</body>
+</html>
