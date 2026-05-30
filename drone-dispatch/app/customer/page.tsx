@@ -2,106 +2,128 @@
 
 import { useState, useEffect } from "react";
 
-export default function CustomerDashboard() {
-  // 1. Simulate pulling cached profile info from the app session
+export default function CustomerView() {
   const [userProfile] = useState({
     name: "Cyril Baraka",
     phone: "+254 712 345678",
-    email: "barakacreal@gmail.com"
   });
 
   const [description, setDescription] = useState("");
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [flightStatus, setFlightStatus] = useState("idle"); // idle, pending_admin, airborne
+  const [flightStatus, setFlightStatus] = useState("idle");
 
-  // 2. Automatically poll phone hardware GPS on component load
   useEffect(() => {
     if ("geolocation" in navigator) {
       navigator.geolocation.getCurrentPosition(
-        (position) => {
-          setCoords({
-            lat: position.coords.latitude,
-            lng: position.coords.longitude,
-          });
-        },
-        (error) => console.error("Error fetching hardware GPS:", error)
+        (pos) => setCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+        (err) => console.error(err)
       );
     }
   }, []);
-
-  const handleSubmitOrder = async (e: React.FormEvent) => {
+  const handleSubmitOrder = async (e: React.SubmitEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
     setFlightStatus("pending_admin");
 
     // 3. Package cached profile details + live sensor GPS + description
-    const payload = {
-      profile: userProfile,
-      gpsLocation: coords || { lat: -1.2880, lng: 36.8220 }, // Fallback to Nairobi CBD if GPS denied
-      message: description,
-    };
+      const payload = {
+        profile: userProfile,
+        gpsLocation: coords || { lat: -1.2880, lng: 36.8220 }, // Fallback to Nairobi CBD if GPS denied
+        message: description,
+      };
 
-    // 4. Send directly to your Next.js API route that connects to Claude
-    try {
-      const response = await fetch("/api/dispatch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      
-      if (response.ok) {
-        console.log("Logistics ticket successfully queued for Admin approval!");
+      try {
+        const response = await fetch("/api/dispatch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        
+        if (response.ok) {
+          console.log("Logistics ticket successfully queued for Admin approval!");
+        }
+      } catch (err) {
+        console.error("Dispatch endpoint failure:", err);
+      } finally {
+        setIsSubmitting(false);
       }
-    } catch (err) {
-      console.error("Dispatch endpoint failure:", err);
-    } finally {
-      setIsSubmitting(false);
-    }
   };
 
   return (
-    <div className="min-h-screen bg-slate-900 text-white p-6 flex flex-col items-center justify-center">
-      <div className="w-full max-w-md bg-slate-800 rounded-xl p-6 shadow-2xl border border-slate-700">
-        <h1 className="text-xl font-bold mb-2 text-cyan-400">SMART DISPATCH NETWORK</h1>
-        <p className="text-xs text-slate-400 mb-6">User: {userProfile.name} ({userProfile.phone})</p>
+    <div className="relative min-h-screen bg-[#e2e8f0] text-[#2d3748] flex items-center justify-center font-sans antialiased overflow-hidden">
+      
+      <div className="absolute top-0 inset-0 bg-linear-to-tr from-[#dfebd4] via-[#e2e9e1] to-[#f3e7dc] z-0"></div>
+      <div className="absolute top-[-20%] right-[-10%] w-150 h-150 bg-[#cbdcc1] rounded-full blur-[120px] opacity-60 mix-blend-multiply z-0"></div>
 
-        {flightStatus === "idle" && (
-          <form onSubmit={handleSubmitOrder} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium mb-1 text-slate-300">Describe Emergency & Payload Needs</label>
-              <textarea
-                className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-sm focus:outline-none focus:border-cyan-500 h-28 resize-none"
-                placeholder="e.g., I have an asthmatic patient near KICC tower, need an inhaler payload dispatched immediately..."
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                required
-              />
+      {/* ── MAIN CONTENT CONTAINER (The main frosted glass layout panel) ── */}
+      <div className="relative w-full max-w-md mx-4 bg-white/40 backdrop-blur-xl border border-white/60 rounded-4xl p-8 shadow-[0_20px_40px_-15px_rgba(0,0,0,0.05)] z-10">
+        
+        {/* Header Block */}
+        <div className="mb-6 flex justify-between items-start">
+          <div>
+            <h1 className="text-xl font-bold tracking-tight text-[#1a202c]">
+              Drone Dispatch
+            </h1>
+            <p className="text-xs text-emerald-800/60 font-medium mt-0.5">
+              Nairobi Hub Operations
+            </p>
+          </div>
+
+
+        </div>
+
+        {flightStatus === "idle" ? (
+          <form 
+            onSubmit={handleSubmitOrder} 
+            className="space-y-5"
+          >
+            {/* Input Wrapper - Clean white pill-style input */}
+            <div className="space-y-1.5">
+              <label className="block text-xs font-semibold text-slate-600/80 px-1">
+                Enter emergency or delivery description
+              </label>
+              <div className="bg-white/50 backdrop-blur-sm border border-white/80 rounded-2xl p-4 shadow-[inset_0_1px_3px_rgba(0,0,0,0.02)] transition-all duration-200 focus-within:bg-white/80">
+                <textarea
+                  className="w-full bg-transparent text-sm focus:outline-none text-slate-800 placeholder-slate-400 h-28 resize-none leading-relaxed"
+                  placeholder="Tell us what you need and any local landmark context..."
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  required
+                />
+              </div>
             </div>
 
-            <div className="bg-slate-950 p-3 rounded-lg border border-slate-800 text-xs text-slate-400">
+            {/* Telemetry Row - matching the table lines from the image */}
+            <div className="bg-white/30 border border-white/60 px-4 py-3.5 rounded-2xl flex justify-between items-center text-xs shadow-sm">
+              <span className="text-slate-500 font-medium">Your GPS Location</span>
               {coords ? (
-                <p className="text-emerald-400 font-mono">✅ Hardware GPS Locked: {coords.lat.toFixed(4)}, {coords.lng.toFixed(4)}</p>
+                <span className="font-mono font-bold text-slate-700">
+                  {coords.lat.toFixed(4)}, {coords.lng.toFixed(4)}
+                </span>
               ) : (
-                <p className="text-amber-400 animate-pulse">📡 Fetching real-time satellite coordinates...</p>
+                <span className="text-slate-400 animate-pulse text-[11px] font-medium">Fetching satellite fix...</span>
               )}
             </div>
 
+            {/* Bright Orange Solid Action Button (Matches the "Accept" buttons in your image) */}
             <button
-              type="submit"
               disabled={isSubmitting}
-              className="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-3 px-4 rounded-lg transition-colors text-sm disabled:opacity-50"
+
+              type="submit"
+              className="w-full bg-[#e65328] hover:bg-[#d4431b] text-white font-semibold py-3.5 px-4 rounded-2xl text-xs tracking-wider uppercase shadow-[0_4px_12px_rgba(230,83,40,0.25)] transition-all duration-200 active:scale-[0.99] cursor-pointer"
             >
               {isSubmitting ? "Generating Flight Vector..." : "Transmit Dispatch Request"}
             </button>
           </form>
-        )}
-
-        {flightStatus === "pending_admin" && (
-          <div className="text-center py-8 space-y-4">
-            <div className="w-12 h-12 border-4 border-cyan-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
-            <h2 className="text-lg font-semibold animate-pulse">Awaiting Operations Commander Approval</h2>
-            <p className="text-xs text-slate-400 px-4">Claude has structuralized your data and sent the coordinates to the Admin console hub.</p>
+        ) : (
+          /* Processing State - Clean Minimal Spinner */
+          <div className="py-10 text-center space-y-4">
+            <div className="w-8 h-8 border-3 border-[#e65328] border-t-transparent rounded-full animate-spin mx-auto"></div>
+            <div className="space-y-0.5">
+              <p className="text-sm font-bold text-slate-800">Awaiting Operator Confirmation</p>
+              <p className="text-xs text-slate-500/70">Routing details via automated system pipeline...</p>
+            </div>
           </div>
         )}
       </div>
