@@ -17,42 +17,53 @@ export default function CustomerView() {
     if ("geolocation" in navigator) {
       navigator.geolocation.getCurrentPosition(
         (pos) => setCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
-        (err) => console.error(err)
+        (err) => console.error("GPS Access Error:", err)
       );
     }
   }, []);
-  const handleSubmitOrder = async (e: React.SubmitEvent) => {
+
+  const handleSubmitOrder = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setIsSubmitting(true);
-    setFlightStatus("pending_admin");
+    
+    // Package cached profile details + live sensor GPS + text description
+    const payload = {
+      profile: userProfile,
+      gpsLocation: coords || { lat: -1.2880, lng: 36.8220 }, // Fallback to Nairobi CBD if GPS is missing
+      message: description,
+    };
 
-    // 3. Package cached profile details + live sensor GPS + description
-      const payload = {
-        profile: userProfile,
-        gpsLocation: coords || { lat: -1.2880, lng: 36.8220 }, // Fallback to Nairobi CBD if GPS denied
-        message: description,
-      };
+    try {
+      const response = await fetch("/api/dispatch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      
+      const data = await response.json();
 
-      try {
-        const response = await fetch("/api/dispatch", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        
-        if (response.ok) {
-          console.log("Logistics ticket successfully queued for Admin approval!");
-        }
-      } catch (err) {
-        console.error("Dispatch endpoint failure:", err);
-      } finally {
-        setIsSubmitting(false);
+      if (response.ok && data.success) {
+        console.log("Logistics ticket successfully queued for Admin approval!");
+        // Switch to the loading/awaiting matrix state only on verified network success
+        setFlightStatus("pending_admin");
+      } else {
+        console.error("Server-side dispatch rejection:", data.error);
+        setFlightStatus("idle");
+        alert("Dispatch routing failed. Please verify connection and try again.");
       }
+    } catch (err) {
+      console.error("Dispatch endpoint failure:", err);
+      setFlightStatus("idle");
+      alert("Network transport layer failure. Check local environment.");
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
     <div className="relative min-h-screen bg-[#e2e8f0] text-[#2d3748] flex items-center justify-center font-sans antialiased overflow-hidden">
       
+      {/* Ambient background mesh configurations */}
       <div className="absolute top-0 inset-0 bg-linear-to-tr from-[#dfebd4] via-[#e2e9e1] to-[#f3e7dc] z-0"></div>
       <div className="absolute top-[-20%] right-[-10%] w-150 h-150 bg-[#cbdcc1] rounded-full blur-[120px] opacity-60 mix-blend-multiply z-0"></div>
 
@@ -69,8 +80,6 @@ export default function CustomerView() {
               Nairobi Hub Operations
             </p>
           </div>
-
-
         </div>
 
         {flightStatus === "idle" ? (
@@ -94,7 +103,7 @@ export default function CustomerView() {
               </div>
             </div>
 
-            {/* Telemetry Row - matching the table lines from the image */}
+            {/* Telemetry Row */}
             <div className="bg-white/30 border border-white/60 px-4 py-3.5 rounded-2xl flex justify-between items-center text-xs shadow-sm">
               <span className="text-slate-500 font-medium">Your GPS Location</span>
               {coords ? (
@@ -106,12 +115,11 @@ export default function CustomerView() {
               )}
             </div>
 
-            {/* Bright Orange Solid Action Button (Matches the "Accept" buttons in your image) */}
+            {/* Bright Orange Solid Action Button */}
             <button
               disabled={isSubmitting}
-
               type="submit"
-              className="w-full bg-[#e65328] hover:bg-[#d4431b] text-white font-semibold py-3.5 px-4 rounded-2xl text-xs tracking-wider uppercase shadow-[0_4px_12px_rgba(230,83,40,0.25)] transition-all duration-200 active:scale-[0.99] cursor-pointer"
+              className="w-full bg-[#e65328] hover:bg-[#d4431b] disabled:bg-[#e65328]/60 text-white font-semibold py-3.5 px-4 rounded-2xl text-xs tracking-wider uppercase shadow-[0_4px_12px_rgba(230,83,40,0.25)] transition-all duration-200 active:scale-[0.99] cursor-pointer disabled:cursor-not-allowed"
             >
               {isSubmitting ? "Generating Flight Vector..." : "Transmit Dispatch Request"}
             </button>
