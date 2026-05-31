@@ -1,7 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import mapboxgl, { type GeoJSONSource, type LngLatLike, type Map as MapboxMap, type Marker } from "mapbox-gl";
+import * as THREE from "three";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import "mapbox-gl/dist/mapbox-gl.css";
 import { densifyRoutePath, type RoutePoint } from "../lib/simulator";
 
@@ -11,6 +13,7 @@ interface FPVMapProps {
   routePath?: RoutePoint[];
   heading?: number;
   activeWaypointIndex?: number;
+  followZoom?: number;
 }
 
 type Coord = [number, number];
@@ -28,13 +31,28 @@ type FeatureCollection<T extends LineFeature | PointFeature> = {
   type: "FeatureCollection";
   features: T[];
 };
+type DroneModelState = {
+  position: { lat: number; lng: number; alt: number };
+  heading: number;
+};
+type DroneModelLayer = mapboxgl.CustomLayerInterface & {
+  dispose?: () => void;
+};
 
 const BASE_POSITION: RoutePoint = { lat: -1.2921, lng: 36.8219, alt: 8, kind: "base" };
 const TACTICAL_STYLE = "mapbox://styles/mapbox/streets-v12";
+const NAIROBI_BOUNDS: [[number, number], [number, number]] = [[36.63, -1.45], [37.10, -1.12]];
+const NAIROBI_CENTER: Coord = [36.8219, -1.2921];
+const MIN_ZOOM = 12.5;
+const MAX_ZOOM = 28;
+const DEFAULT_FOLLOW_ZOOM = 28.1;
 const SOURCE_ROUTE = "pocket-route";
 const SOURCE_TRAVELED = "pocket-route-traveled";
 const SOURCE_WAYPOINTS = "pocket-waypoints";
 const SOURCE_HEADING = "pocket-heading";
+const DRONE_MODEL_LAYER = "pocket-drone-model";
+const DRONE_MODEL_URL = "/models/drone.glb";
+const DRONE_MODEL_SCALE_METERS = 18;
 
 export default function FPVMap({
   dronePosition,
@@ -42,11 +60,14 @@ export default function FPVMap({
   routePath = [],
   heading = 0,
   activeWaypointIndex = 0,
+  followZoom = DEFAULT_FOLLOW_ZOOM,
 }: FPVMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapboxMap | null>(null);
   const droneMarkerRef = useRef<Marker | null>(null);
   const targetMarkerRef = useRef<Marker | null>(null);
+  const droneModelLayerRef = useRef<DroneModelLayer | null>(null);
+  const droneModelStateRef = useRef<DroneModelState>({ position: dronePosition, heading });
   const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN;
   const [error, setError] = useState<string | null>(
     mapboxToken ? null : "Add NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN to enable the Mapbox tactical 3D map."
@@ -79,6 +100,11 @@ export default function FPVMap({
   }, [headingData, routeData, traveledData, waypointData]);
 
   useEffect(() => {
+    droneModelStateRef.current = { position: dronePosition, heading };
+    mapRef.current?.triggerRepaint();
+  }, [dronePosition, heading]);
+
+  useEffect(() => {
     if (!containerRef.current || !mapboxToken) return;
 
     mapboxgl.accessToken = mapboxToken.trim();
@@ -89,6 +115,9 @@ export default function FPVMap({
       style: TACTICAL_STYLE,
       center: routeCenter(tacticalRoute),
       zoom: 15.7,
+      minZoom: MIN_ZOOM,
+      maxZoom: MAX_ZOOM,
+      maxBounds: NAIROBI_BOUNDS,
       pitch: 56,
       bearing: 0,
       antialias: true,
@@ -98,6 +127,11 @@ export default function FPVMap({
 
     mapRef.current = map;
     map.addControl(new mapboxgl.AttributionControl({ compact: true }), "bottom-right");
+    map.scrollZoom.setWheelZoomRate(1 / 900);
+    map.scrollZoom.setZoomRate(1 / 140);
+
+    map.touchZoomRotate.disableRotation();
+    map.keyboard.disableRotation();
 
     const resizeObserver = new ResizeObserver(() => {
       map.resize();
@@ -131,6 +165,18 @@ export default function FPVMap({
     const syncLayers = () => {
       try {
         addTacticalSourcesAndLayers(map, latestDataRef.current);
+        if (!map.getLayer(DRONE_MODEL_LAYER)) {
+          const modelLayer = createDroneModelLayer(
+            map,
+            droneModelStateRef,
+            () => undefined,
+            () => {
+              droneMarker.getElement().style.display = "";
+            }
+          );
+          map.addLayer(modelLayer);
+          droneModelLayerRef.current = modelLayer;
+        }
         setError(null);
       } catch (err) {
         console.error("Mapbox tactical layer setup failed:", err);
@@ -176,6 +222,7 @@ export default function FPVMap({
       map.off("style.load", syncLayers);
       map.off("idle", onRenderReady);
       map.off("error", onError);
+      droneModelLayerRef.current?.dispose?.();
       droneMarker.remove();
       targetMarker.remove();
       resizeObserver.disconnect();
@@ -183,6 +230,7 @@ export default function FPVMap({
       mapRef.current = null;
       droneMarkerRef.current = null;
       targetMarkerRef.current = null;
+      droneModelLayerRef.current = null;
     };
     // Initial map creation only; data/camera updates are handled separately.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -214,7 +262,7 @@ export default function FPVMap({
     const map = mapRef.current;
     if (!map) return;
 
-    const target = followCameraTarget(dronePosition);
+    const target = followCameraTarget(dronePosition, followZoom);
     map.easeTo({
       center: target.center,
       zoom: target.zoom,
@@ -223,7 +271,7 @@ export default function FPVMap({
       duration: 650,
       essential: true,
     });
-  }, [dronePosition]);
+  }, [dronePosition, followZoom]);
 
   return (
     <div className="relative w-full h-full bg-[#edf1f3]" style={{ minHeight: "200px" }}>
@@ -313,6 +361,96 @@ function addTacticalSourcesAndLayers(
       },
     });
   }
+}
+
+function createDroneModelLayer(
+  map: MapboxMap,
+  stateRef: RefObject<DroneModelState>,
+  onReady: () => void,
+  onFallback: () => void
+): DroneModelLayer {
+  let camera: THREE.Camera;
+  let scene: THREE.Scene;
+  let renderer: THREE.WebGLRenderer;
+  let modelRoot: THREE.Group | null = null;
+
+  return {
+    id: DRONE_MODEL_LAYER,
+    type: "custom",
+    renderingMode: "3d",
+    onAdd: (_map, gl) => {
+      camera = new THREE.Camera();
+      scene = new THREE.Scene();
+
+      const ambientLight = new THREE.AmbientLight(0xffffff, 1.8);
+      const keyLight = new THREE.DirectionalLight(0xffffff, 2.5);
+      keyLight.position.set(0, -70, 120);
+      scene.add(ambientLight, keyLight);
+
+      renderer = new THREE.WebGLRenderer({
+        canvas: map.getCanvas(),
+        context: gl,
+        antialias: true,
+      });
+      renderer.autoClear = false;
+
+      const loader = new GLTFLoader();
+      loader.load(
+        DRONE_MODEL_URL,
+        (gltf) => {
+          modelRoot = new THREE.Group();
+          modelRoot.add(gltf.scene);
+          gltf.scene.traverse((child) => {
+            if (child instanceof THREE.Mesh) {
+              child.castShadow = false;
+              child.frustumCulled = false;
+            }
+          });
+          scene.add(modelRoot);
+          onReady();
+          map.triggerRepaint();
+        },
+        undefined,
+        (error) => {
+          console.warn("Unable to load drone GLTF model:", error);
+          onFallback();
+        }
+      );
+    },
+    render: (_gl, matrix) => {
+      if (!renderer || !scene || !camera || !modelRoot) return;
+
+      const { position, heading } = stateRef.current;
+      const center = clampCoord([position.lng, position.lat]);
+      const mercator = mapboxgl.MercatorCoordinate.fromLngLat(center, Math.max(position.alt, 12));
+      const meterScale = mercator.meterInMercatorCoordinateUnits() * DRONE_MODEL_SCALE_METERS;
+
+      const mapMatrix = new THREE.Matrix4().fromArray(matrix as number[]);
+      const transformMatrix = new THREE.Matrix4()
+        .makeTranslation(mercator.x, mercator.y, mercator.z)
+        .scale(new THREE.Vector3(meterScale, -meterScale, meterScale))
+        .multiply(new THREE.Matrix4().makeRotationX(Math.PI / 2))
+        .multiply(new THREE.Matrix4().makeRotationZ((-heading * Math.PI) / 180));
+
+      camera.projectionMatrix = mapMatrix.multiply(transformMatrix);
+      renderer.resetState();
+      renderer.render(scene, camera);
+      map.triggerRepaint();
+    },
+    dispose: () => {
+      if (modelRoot) {
+        modelRoot.traverse((child) => {
+          if (child instanceof THREE.Mesh) {
+            child.geometry.dispose();
+            const materials = Array.isArray(child.material) ? child.material : [child.material];
+            materials.forEach((material) => material.dispose());
+          }
+        });
+      }
+      renderer?.dispose();
+      modelRoot = null;
+    },
+  };
 }
 
 function addBuildingExtrusions(map: MapboxMap) {
@@ -406,12 +544,11 @@ function headingFeatureCollection(
   };
 }
 
-function followCameraTarget(
-  dronePosition: { lat: number; lng: number; alt: number }
-) {
+function followCameraTarget(dronePosition: { lat: number; lng: number; alt: number }, followZoom: number) {
+  const center = clampCoord([dronePosition.lng, dronePosition.lat]);
   return {
-    center: [dronePosition.lng, dronePosition.lat] as LngLatLike,
-    zoom: 16.1,
+    center: center as LngLatLike,
+    zoom: clampNumber(followZoom, MIN_ZOOM, MAX_ZOOM),
     pitch: 56,
     bearing: 0,
   };
@@ -445,10 +582,10 @@ function createTargetElement(): HTMLDivElement {
 
 function routeCenter(route: RoutePoint[]): LngLatLike {
   const points = route.length > 0 ? route : [BASE_POSITION];
-  return [
+  return clampCoord([
     points.reduce((sum, point) => sum + point.lng, 0) / points.length,
     points.reduce((sum, point) => sum + point.lat, 0) / points.length,
-  ];
+  ]);
 }
 
 function pointToCoord(point: { lat: number; lng: number }): Coord {
@@ -472,4 +609,17 @@ function offsetPoint(point: { lat: number; lng: number }, headingDeg: number, me
   );
 
   return { lat: lat2 * 180 / Math.PI, lng: lng2 * 180 / Math.PI };
+}
+
+function clampCoord(coord: Coord): Coord {
+  if (!isFinite(coord[0]) || !isFinite(coord[1])) return NAIROBI_CENTER;
+  return [
+    clampNumber(coord[0], NAIROBI_BOUNDS[0][0], NAIROBI_BOUNDS[1][0]),
+    clampNumber(coord[1], NAIROBI_BOUNDS[0][1], NAIROBI_BOUNDS[1][1]),
+  ];
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  if (!isFinite(value)) return min;
+  return Math.min(max, Math.max(min, value));
 }

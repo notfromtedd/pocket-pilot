@@ -34,6 +34,8 @@ type UrgencyLevel = "STANDARD" | "HIGH" | "CRITICAL";
 
 const TELEMETRY_UPDATE_MS = 250;
 const SIMULATION_TIME_SCALE = 8;
+const DEFAULT_FOLLOW_ZOOM = 16.1;
+const DEFAULT_DEMO_CRUISE_ALTITUDE = 120;
 
 export default function AdminControlCenter() {
   const [tickets, setTickets] = useState<Ticket[]>([]);
@@ -51,6 +53,8 @@ export default function AdminControlCenter() {
   const [currentHeading, setCurrentHeading] = useState(0);
   const [activeWaypointIndex, setActiveWaypointIndex] = useState(0);
   const [routePath, setRoutePath] = useState<RoutePoint[]>([]);
+  const [followZoom, setFollowZoom] = useState(DEFAULT_FOLLOW_ZOOM);
+  const [demoCruiseAltitude, setDemoCruiseAltitude] = useState(DEFAULT_DEMO_CRUISE_ALTITUDE);
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -259,7 +263,10 @@ export default function AdminControlCenter() {
 
     const plan = createFlightPlan(
       { lat: selectedTicket.latitude, lng: selectedTicket.longitude },
-      { urgencyLevel: (selectedTicket.urgency_level as UrgencyLevel) || "STANDARD" }
+      {
+        urgencyLevel: (selectedTicket.urgency_level as UrgencyLevel) || "STANDARD",
+        cruiseAltitude: demoCruiseAltitude,
+      }
     );
     setRoutePath(plan.routePath);
     setCurrentHeading(0);
@@ -270,6 +277,7 @@ export default function AdminControlCenter() {
     let progress = 0;
     const loggedMilestones = new Set<number>();
     let lastPhase: FlightPhase | null = null;
+    addLog(`↥ Demo cruise altitude set to ${plan.cruiseAltitude}m.`);
 
     timerRef.current = setInterval(() => setElapsedTime((t) => t + 1), 1000);
 
@@ -335,7 +343,7 @@ export default function AdminControlCenter() {
         }
       }
     }, TELEMETRY_UPDATE_MS);
-  }, [selectedTicket, droneState, addLog]);
+  }, [selectedTicket, droneState, addLog, demoCruiseAltitude]);
 
   useEffect(() => {
     return () => {
@@ -425,7 +433,20 @@ export default function AdminControlCenter() {
                 <div className="bg-slate-800 text-white px-3 py-1.5 rounded-full text-[10px] font-bold tracking-wider">3D REALISTIC</div>
                 <div className="bg-[#e65328] text-white px-2.5 py-1 rounded-full text-[9px] font-bold tracking-wider uppercase">Follow</div>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-3">
+                <label className="flex items-center gap-2 rounded-full border border-white/60 bg-white/50 px-3 py-1 text-[9px] font-bold uppercase tracking-wider text-slate-500">
+                  <span>Zoom {followZoom.toFixed(1)}</span>
+                  <input
+                    type="range"
+                    min="12.5"
+                    max="18"
+                    step="0.1"
+                    value={followZoom}
+                    onChange={(event) => setFollowZoom(Number(event.target.value))}
+                    className="w-24 accent-[#e65328]"
+                    aria-label="Follow camera zoom"
+                  />
+                </label>
                 <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[9px] font-bold uppercase tracking-wider ${
                   droneState === "IDLE" ? "bg-slate-100 text-slate-500" : droneState === "AIRBORNE" ? "bg-[#e65328]/10 text-[#e65328]" : droneState === "DELIVERED" ? "bg-emerald-100 text-emerald-600" : "bg-red-100 text-red-600"
                 }`}>
@@ -444,6 +465,7 @@ export default function AdminControlCenter() {
                   routePath={routePath}
                   heading={currentHeading}
                   activeWaypointIndex={activeWaypointIndex}
+                  followZoom={followZoom}
                 />
               ) : (
                 <div className="w-full h-full flex items-center justify-center text-slate-400">
@@ -504,13 +526,34 @@ export default function AdminControlCenter() {
                     { label: "Battery", value: `${battery}%`, color: battery > 50 ? "text-emerald-600" : battery > 25 ? "text-orange-500" : "text-red-500" },
                     { label: "Phase", value: currentPhase, color: "text-slate-700" },
                     { label: "Altitude", value: `${Math.round(dronePosition.alt)}m`, color: "text-slate-700" },
-                    { label: "Speed", value: `${currentSpeed}`, color: "text-slate-700" },
+                    { label: "Cruise", value: `${demoCruiseAltitude}m`, color: "text-slate-700" },
                   ].map((m) => (
                     <div key={m.label} className="bg-white/40 border border-white/60 p-2.5 rounded-xl text-center">
                       <p className="text-[8px] font-bold text-slate-400 uppercase tracking-widest">{m.label}</p>
                       <p className={`text-base font-mono font-bold ${m.color} mt-0.5`}>{m.value}</p>
                     </div>
                   ))}
+                </div>
+
+                <div className="bg-white/40 border border-white/60 rounded-xl p-3 mb-3">
+                  <div className="flex items-center justify-between gap-3 mb-2">
+                    <div>
+                      <p className="text-[8px] font-bold text-slate-400 uppercase tracking-widest">Demo Cruise Altitude</p>
+                      <p className="text-[9px] text-slate-500">Simulation tuning only</p>
+                    </div>
+                    <span className="text-sm font-mono font-bold text-slate-700">{demoCruiseAltitude}m</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="60"
+                    max="180"
+                    step="5"
+                    value={demoCruiseAltitude}
+                    onChange={(event) => setDemoCruiseAltitude(Number(event.target.value))}
+                    disabled={droneState === "AIRBORNE"}
+                    className="w-full accent-[#e65328] disabled:opacity-50"
+                    aria-label="Demo cruise altitude"
+                  />
                 </div>
 
                 <div className="flex-1 bg-white/30 border border-white/50 rounded-xl p-2.5 mb-3 overflow-hidden flex flex-col min-h-0">
