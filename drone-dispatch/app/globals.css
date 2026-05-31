@@ -1,8 +1,9 @@
 @import "tailwindcss";
+@import "leaflet/dist/leaflet.css";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #f0f2f5;
+  --foreground: #1a202c;
 }
 
 @theme inline {
@@ -12,15 +13,87 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
 body {
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
+}
+
+/* ── Custom scrollbar for queue panels ── */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.08);
+  border-radius: 100px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.15);
+}
+
+/* ── Drone marker pulse animation (Leaflet) ── */
+@keyframes drone-pulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.6);
+    opacity: 0;
+  }
+}
+
+.drone-marker-pulse {
+  animation: drone-pulse 2s ease-in-out infinite;
+}
+
+/* ── Status step dot pulse ── */
+@keyframes step-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.step-pulse {
+  animation: step-pulse 1.5s ease-in-out infinite;
+}
+
+/* ── Flight progress bar shimmer ── */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.progress-shimmer {
+  background: linear-gradient(
+    90deg,
+    #e65328 0%,
+    #f59e0b 25%,
+    #e65328 50%,
+    #f59e0b 75%,
+    #e65328 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 2s linear infinite;
+}
+
+/* ── Radar sweep for 2D tactical mode ── */
+@keyframes radar-sweep {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.radar-sweep {
+  animation: radar-sweep 4s linear infinite;
+}
+
+/* ── Override Leaflet z-index for Next.js ── */
+.leaflet-pane {
+  z-index: 1 !important;
+}
+.leaflet-top,
+.leaflet-bottom {
+  z-index: 2 !important;
 }

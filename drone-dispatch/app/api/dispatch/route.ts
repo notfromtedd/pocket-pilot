@@ -1,6 +1,8 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { NextResponse } from 'next/server';
-import { supabase } from '@/app/lib/supabase'; // Import your Supabase client
+import { supabase } from '@/app/lib/supabase';
+
+export const dynamic = 'force-dynamic';
 
 const anthropic = new Anthropic({
     apiKey: process.env.ANTHROPIC_API_KEY,
