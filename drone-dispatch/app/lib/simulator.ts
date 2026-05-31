@@ -19,6 +19,8 @@ export interface DroneVector {
   speed: number;     // km/h
   heading: number;   // degrees (0 = North, 90 = East)
   battery: number;   // percentage
+  phase: FlightPhase;
+  activeWaypointIndex: number;
 }
 
 export interface FlightPlan {
@@ -26,6 +28,22 @@ export interface FlightPlan {
   destination: GeoPoint;
   cruiseAltitude: number; // meters
   maxSpeed: number;       // km/h
+  urgencyLevel?: "STANDARD" | "HIGH" | "CRITICAL";
+  routePath: RoutePoint[];
+}
+
+export type FlightPhase = "LAUNCH" | "CLIMB" | "CRUISE" | "APPROACH" | "DESCENT" | "DELIVERED";
+export type RoutePointKind = "base" | "climb" | "cruise" | "turn" | "approach" | "target";
+
+export interface RoutePoint extends GeoPoint {
+  alt: number;
+  kind: RoutePointKind;
+}
+
+export interface FlightPlanOptions {
+  urgencyLevel?: "STANDARD" | "HIGH" | "CRITICAL";
+  cruiseAltitude?: number;
+  maxSpeed?: number;
 }
 
 // ── CONSTANTS ──
@@ -34,6 +52,16 @@ const EARTH_RADIUS_KM = 6371;
 const SMS_TRIGGER_DISTANCE_M = 150;
 const DEFAULT_CRUISE_ALT = 120;   // meters
 const DEFAULT_MAX_SPEED = 65;     // km/h
+const URGENCY_SPEED_BOOST = {
+  STANDARD: 1,
+  HIGH: 1.12,
+  CRITICAL: 1.24,
+} as const;
+const URGENCY_ALTITUDE_BOOST = {
+  STANDARD: 1,
+  HIGH: 1.08,
+  CRITICAL: 1.15,
+} as const;
 
 // ── GEO CALCULATIONS ──
 
@@ -79,29 +107,23 @@ export function interpolatePosition(
   t: number
 ): DroneVector {
   const clampedT = Math.max(0, Math.min(1, t));
+  const routeSample = sampleRoute(plan.routePath, clampedT);
+  const phase = clampedT >= 1 ? "DELIVERED" : phaseForRouteKind(routeSample.kind);
+  const { lat, lng, alt, activeWaypointIndex } = routeSample;
 
-  const lat = plan.origin.lat + (plan.destination.lat - plan.origin.lat) * clampedT;
-  const lng = plan.origin.lng + (plan.destination.lng - plan.origin.lng) * clampedT;
-
-  // Parabolic altitude profile: 0 → cruise → 0
-  const alt = plan.cruiseAltitude * 4 * clampedT * (1 - clampedT);
-
-  // Speed ramps up then down
-  const speedFactor = clampedT < 0.15
-    ? clampedT / 0.15
-    : clampedT > 0.85
-      ? (1 - clampedT) / 0.15
-      : 1;
+  const speedFactor = clampedT < 0.12
+    ? clampedT / 0.12
+    : clampedT > 0.88
+      ? (1 - clampedT) / 0.12
+      : phase === "APPROACH" ? 0.72 : 1;
   const speed = plan.maxSpeed * speedFactor;
 
-  // Heading from current interpolated position to destination
-  const currentPos: GeoPoint = { lat, lng };
-  const head = bearing(currentPos, plan.destination);
+  const tripMeters = haversineDistance(plan.origin, plan.destination);
+  const tripKmPenalty = Math.min(18, tripMeters / 1000 * 2.2);
+  const speedPenalty = plan.maxSpeed > DEFAULT_MAX_SPEED ? 4 : 0;
+  const battery = Math.max(12, 100 - clampedT * (62 + tripKmPenalty + speedPenalty));
 
-  // Battery drain: starts at 100, linearly drops to ~15 at destination
-  const battery = Math.max(15, 100 - clampedT * 85);
-
-  return { lat, lng, alt, speed, heading: head, battery };
+  return { lat, lng, alt, speed, heading: routeSample.heading, battery, phase, activeWaypointIndex };
 }
 
 // ── PROXIMITY CHECK ──
@@ -119,13 +141,120 @@ export function remainingDistance(drone: GeoPoint, target: GeoPoint): number {
 // ── FLIGHT PLAN FACTORY ──
 
 /** Create a default flight plan from the Nairobi base to a target */
-export function createFlightPlan(target: GeoPoint): FlightPlan {
+export function createFlightPlan(target: GeoPoint, options: FlightPlanOptions = {}): FlightPlan {
+  const urgencyLevel = options.urgencyLevel ?? "STANDARD";
+  const cruiseAltitude = Math.round((options.cruiseAltitude ?? DEFAULT_CRUISE_ALT) * URGENCY_ALTITUDE_BOOST[urgencyLevel]);
+  const origin = { lat: -1.2921, lng: 36.8219 };
   return {
-    origin: { lat: -1.2921, lng: 36.8219 }, // Nairobi base (near KICC)
+    origin, // Nairobi base (near KICC)
     destination: target,
-    cruiseAltitude: DEFAULT_CRUISE_ALT,
-    maxSpeed: DEFAULT_MAX_SPEED,
+    cruiseAltitude,
+    maxSpeed: Math.round((options.maxSpeed ?? DEFAULT_MAX_SPEED) * URGENCY_SPEED_BOOST[urgencyLevel]),
+    urgencyLevel,
+    routePath: createRoutePath(origin, target, cruiseAltitude),
   };
+}
+
+function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * Math.max(0, Math.min(1, t));
+}
+
+export function createRoutePath(origin: GeoPoint, destination: GeoPoint, cruiseAltitude = DEFAULT_CRUISE_ALT): RoutePoint[] {
+  const dx = destination.lng - origin.lng;
+  const dy = destination.lat - origin.lat;
+  const dist = Math.hypot(dx, dy) || 0.001;
+  const nx = -dy / dist;
+  const ny = dx / dist;
+  const bend = Math.min(0.0038, Math.max(0.0013, dist * 0.32));
+
+  const pointAt = (t: number, offset = 0): GeoPoint => ({
+    lat: origin.lat + dy * t + ny * offset,
+    lng: origin.lng + dx * t + nx * offset,
+  });
+
+  const climb = pointAt(0.16, bend * 0.55);
+  const cruiseA = pointAt(0.36, bend);
+  const turn = pointAt(0.58, -bend * 0.75);
+  const cruiseB = pointAt(0.76, -bend * 0.35);
+  const approach = pointAt(0.92, bend * 0.18);
+
+  return [
+    { ...origin, alt: 8, kind: "base" },
+    { ...climb, alt: Math.max(55, cruiseAltitude * 0.48), kind: "climb" },
+    { ...cruiseA, alt: cruiseAltitude, kind: "cruise" },
+    { ...turn, alt: cruiseAltitude + 18, kind: "turn" },
+    { ...cruiseB, alt: cruiseAltitude - 8, kind: "cruise" },
+    { ...approach, alt: 45, kind: "approach" },
+    { ...destination, alt: 8, kind: "target" },
+  ];
+}
+
+export function densifyRoutePath(routePath: RoutePoint[], samplesPerSegment = 10): RoutePoint[] {
+  if (routePath.length < 2) return routePath;
+
+  const dense: RoutePoint[] = [];
+  for (let i = 0; i < routePath.length - 1; i++) {
+    const a = routePath[i];
+    const b = routePath[i + 1];
+    for (let step = 0; step < samplesPerSegment; step++) {
+      const t = step / samplesPerSegment;
+      dense.push({
+        lat: lerp(a.lat, b.lat, t),
+        lng: lerp(a.lng, b.lng, t),
+        alt: lerp(a.alt, b.alt, smoothstep(t)),
+        kind: t < 0.5 ? a.kind : b.kind,
+      });
+    }
+  }
+  dense.push(routePath[routePath.length - 1]);
+  return dense;
+}
+
+function sampleRoute(routePath: RoutePoint[], progress: number): RoutePoint & { heading: number; activeWaypointIndex: number } {
+  if (routePath.length === 0) {
+    return { lat: -1.2921, lng: 36.8219, alt: 0, kind: "base", heading: 0, activeWaypointIndex: 0 };
+  }
+  if (routePath.length === 1 || progress <= 0) {
+    const next = routePath[1] ?? routePath[0];
+    return { ...routePath[0], heading: bearing(routePath[0], next), activeWaypointIndex: 0 };
+  }
+  if (progress >= 1) {
+    const last = routePath[routePath.length - 1];
+    const prev = routePath[routePath.length - 2];
+    return { ...last, heading: bearing(prev, last), activeWaypointIndex: routePath.length - 1 };
+  }
+
+  const segmentCount = routePath.length - 1;
+  const scaled = progress * segmentCount;
+  const index = Math.min(segmentCount - 1, Math.floor(scaled));
+  const localT = smoothstep(scaled - index);
+  const a = routePath[index];
+  const b = routePath[index + 1];
+  const lat = lerp(a.lat, b.lat, localT);
+  const lng = lerp(a.lng, b.lng, localT);
+  const alt = lerp(a.alt, b.alt, localT) + Math.sin(localT * Math.PI) * 3;
+
+  return {
+    lat,
+    lng,
+    alt,
+    kind: localT < 0.5 ? a.kind : b.kind,
+    heading: bearing({ lat, lng }, b),
+    activeWaypointIndex: index + 1,
+  };
+}
+
+function phaseForRouteKind(kind: RoutePointKind): FlightPhase {
+  if (kind === "base") return "LAUNCH";
+  if (kind === "climb") return "CLIMB";
+  if (kind === "approach") return "APPROACH";
+  if (kind === "target") return "DESCENT";
+  return "CRUISE";
+}
+
+function smoothstep(t: number): number {
+  const x = Math.max(0, Math.min(1, t));
+  return x * x * (3 - 2 * x);
 }
 
 // ── FORMAT HELPERS ──

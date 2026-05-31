@@ -79,13 +79,37 @@ CREATE TABLE IF NOT EXISTS tickets (
 CREATE TABLE IF NOT EXISTS drone_telemetry (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   ticket_id UUID,
+  order_id UUID REFERENCES orders(id),
   lat DOUBLE PRECISION,
   lng DOUBLE PRECISION,
   alt DOUBLE PRECISION DEFAULT 0,
   battery INT DEFAULT 100,
   speed INT DEFAULT 0,
   heading INT DEFAULT 0,
+  phase TEXT DEFAULT 'LAUNCH',
+  active_waypoint_index INT DEFAULT 0,
+  route_path JSONB DEFAULT '[]'::jsonb,
   updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+ALTER TABLE public.drone_telemetry ADD COLUMN IF NOT EXISTS order_id UUID REFERENCES orders(id);
+ALTER TABLE public.drone_telemetry ADD COLUMN IF NOT EXISTS phase TEXT DEFAULT 'LAUNCH';
+ALTER TABLE public.drone_telemetry ADD COLUMN IF NOT EXISTS active_waypoint_index INT DEFAULT 0;
+ALTER TABLE public.drone_telemetry ADD COLUMN IF NOT EXISTS route_path JSONB DEFAULT '[]'::jsonb;
+CREATE UNIQUE INDEX IF NOT EXISTS drone_telemetry_ticket_unique
+  ON public.drone_telemetry(ticket_id);
+
+-- Mission events are the audit trail and future command bus for Claude/control actions.
+CREATE TABLE IF NOT EXISTS mission_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  ticket_id UUID REFERENCES tickets(id),
+  order_id UUID REFERENCES orders(id),
+  command TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'admin',
+  payload JSONB DEFAULT '{}'::jsonb,
+  accepted BOOLEAN DEFAULT TRUE,
+  reason TEXT,
+  created_at TIMESTAMPTZ DEFAULT now()
 );
 
 -- Data API access and RLS policies
@@ -96,6 +120,7 @@ GRANT SELECT, INSERT, UPDATE ON TABLE public.orders TO anon, authenticated;
 GRANT SELECT, INSERT ON TABLE public.order_items TO anon, authenticated;
 GRANT SELECT, INSERT, UPDATE ON TABLE public.tickets TO anon, authenticated;
 GRANT SELECT, INSERT, UPDATE ON TABLE public.drone_telemetry TO anon, authenticated;
+GRANT SELECT, INSERT ON TABLE public.mission_events TO anon, authenticated;
 
 ALTER TABLE public.customers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.products ENABLE ROW LEVEL SECURITY;
@@ -103,6 +128,7 @@ ALTER TABLE public.orders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.order_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.tickets ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.drone_telemetry ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.mission_events ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS customers_read_own_profile ON public.customers;
 CREATE POLICY customers_read_own_profile
@@ -161,6 +187,14 @@ CREATE POLICY tickets_public_access
 DROP POLICY IF EXISTS drone_telemetry_public_access ON public.drone_telemetry;
 CREATE POLICY drone_telemetry_public_access
   ON public.drone_telemetry
+  FOR ALL
+  TO anon, authenticated
+  USING (true)
+  WITH CHECK (true);
+
+DROP POLICY IF EXISTS mission_events_public_access ON public.mission_events;
+CREATE POLICY mission_events_public_access
+  ON public.mission_events
   FOR ALL
   TO anon, authenticated
   USING (true)
@@ -226,6 +260,16 @@ BEGIN
         AND tablename = 'orders'
     ) THEN
       ALTER PUBLICATION supabase_realtime ADD TABLE public.orders;
+    END IF;
+
+    IF NOT EXISTS (
+      SELECT 1
+      FROM pg_publication_tables
+      WHERE pubname = 'supabase_realtime'
+        AND schemaname = 'public'
+        AND tablename = 'mission_events'
+    ) THEN
+      ALTER PUBLICATION supabase_realtime ADD TABLE public.mission_events;
     END IF;
   ELSE
     RAISE NOTICE 'supabase_realtime publication does not exist; skipping realtime registration.';

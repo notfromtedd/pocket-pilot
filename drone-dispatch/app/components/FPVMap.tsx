@@ -1,472 +1,475 @@
 "use client";
 
-import { useRef, useEffect, useCallback } from "react";
-import * as THREE from "three";
+import { useEffect, useMemo, useRef, useState } from "react";
+import mapboxgl, { type GeoJSONSource, type LngLatLike, type Map as MapboxMap, type Marker } from "mapbox-gl";
+import "mapbox-gl/dist/mapbox-gl.css";
+import { densifyRoutePath, type RoutePoint } from "../lib/simulator";
 
 interface FPVMapProps {
   dronePosition: { lat: number; lng: number; alt: number };
   targetPosition: { lat: number; lng: number };
-  viewMode: "3D" | "2D";
+  routePath?: RoutePoint[];
+  heading?: number;
+  activeWaypointIndex?: number;
 }
 
-// ── Coordinate helpers ──
-// Map lat/lng offsets to scene units (arbitrary scale for visual clarity)
-const BASE_LAT = -1.2921;
-const BASE_LNG = 36.8219;
-const SCALE = 8000;
+type Coord = [number, number];
+type LineFeature = {
+  type: "Feature";
+  properties: Record<string, string | number | boolean>;
+  geometry: { type: "LineString"; coordinates: Coord[] };
+};
+type PointFeature = {
+  type: "Feature";
+  properties: Record<string, string | number | boolean>;
+  geometry: { type: "Point"; coordinates: Coord };
+};
+type FeatureCollection<T extends LineFeature | PointFeature> = {
+  type: "FeatureCollection";
+  features: T[];
+};
 
-function geoToScene(lat: number, lng: number): [number, number] {
-  return [(lng - BASE_LNG) * SCALE, -(lat - BASE_LAT) * SCALE];
-}
-
-// ── Building colour palette ──
-const BUILDING_COLORS = [0xe8e4de, 0xd4cfc7, 0xf0ece6, 0xddd8d0, 0xe5e0d8];
+const BASE_POSITION: RoutePoint = { lat: -1.2921, lng: 36.8219, alt: 8, kind: "base" };
+const TACTICAL_STYLE = "mapbox://styles/mapbox/light-v11";
+const SOURCE_ROUTE = "pocket-route";
+const SOURCE_TRAVELED = "pocket-route-traveled";
+const SOURCE_WAYPOINTS = "pocket-waypoints";
+const SOURCE_HEADING = "pocket-heading";
 
 export default function FPVMap({
   dronePosition,
   targetPosition,
-  viewMode,
+  routePath = [],
+  heading = 0,
+  activeWaypointIndex = 0,
 }: FPVMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const stateRef = useRef({
-    viewMode,
-    dronePosition,
-    targetPosition,
-  });
+  const mapRef = useRef<MapboxMap | null>(null);
+  const droneMarkerRef = useRef<Marker | null>(null);
+  const targetMarkerRef = useRef<Marker | null>(null);
+  const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN;
+  const [error, setError] = useState<string | null>(
+    mapboxToken ? null : "Add NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN to enable the Mapbox tactical 3D map."
+  );
+  const [loading, setLoading] = useState(Boolean(mapboxToken));
+  const [mapReady, setMapReady] = useState(false);
+  const mapReadyRef = useRef(false);
 
-  // Keep latest props in ref so the animation loop always reads fresh values
+  const tacticalRoute = useMemo<RoutePoint[]>(() => {
+    if (routePath.length > 1) return routePath;
+    return [
+      BASE_POSITION,
+      { lat: dronePosition.lat, lng: dronePosition.lng, alt: Math.max(dronePosition.alt, 60), kind: "cruise" },
+      { lat: targetPosition.lat, lng: targetPosition.lng, alt: 8, kind: "target" },
+    ];
+  }, [routePath, dronePosition.lat, dronePosition.lng, dronePosition.alt, targetPosition.lat, targetPosition.lng]);
+
+  const denseRoute = useMemo(() => densifyRoutePath(tacticalRoute, 14), [tacticalRoute]);
+  const routeData = useMemo(() => routeFeatureCollection(denseRoute), [denseRoute]);
+  const traveledData = useMemo(() => {
+    const cutoff = Math.max(1, Math.round((activeWaypointIndex / Math.max(tacticalRoute.length - 1, 1)) * denseRoute.length));
+    return routeFeatureCollection(denseRoute.slice(0, Math.min(denseRoute.length, cutoff + 1)));
+  }, [activeWaypointIndex, denseRoute, tacticalRoute.length]);
+  const waypointData = useMemo(() => waypointFeatureCollection(tacticalRoute, activeWaypointIndex), [activeWaypointIndex, tacticalRoute]);
+  const headingData = useMemo(() => headingFeatureCollection(dronePosition, heading), [dronePosition, heading]);
+  const latestDataRef = useRef({ routeData, traveledData, waypointData, headingData });
+
   useEffect(() => {
-    stateRef.current.viewMode = viewMode;
-    stateRef.current.dronePosition = dronePosition;
-    stateRef.current.targetPosition = targetPosition;
-  }, [viewMode, dronePosition, targetPosition]);
+    latestDataRef.current = { routeData, traveledData, waypointData, headingData };
+  }, [headingData, routeData, traveledData, waypointData]);
 
-  // ── Main Three.js lifecycle ──
-  const setupScene = useCallback(() => {
-    const container = containerRef.current;
-    if (!container) return;
+  useEffect(() => {
+    if (!containerRef.current || !mapboxToken) return;
 
-    // ── Renderer ──
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.setSize(container.clientWidth, container.clientHeight);
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    container.appendChild(renderer.domElement);
+    mapboxgl.accessToken = mapboxToken.trim();
+    mapReadyRef.current = false;
 
-    // ── Scene ──
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0xf0f2f5);
-    scene.fog = new THREE.FogExp2(0xf0f2f5, 0.0012);
-
-    // ── Cameras ──
-    const aspect = container.clientWidth / container.clientHeight;
-    const perspCam = new THREE.PerspectiveCamera(50, aspect, 0.1, 2000);
-    perspCam.position.set(200, 260, 320);
-    perspCam.lookAt(0, 0, 0);
-
-    const orthoHalf = 250;
-    const orthoCam = new THREE.OrthographicCamera(
-      -orthoHalf * aspect,
-      orthoHalf * aspect,
-      orthoHalf,
-      -orthoHalf,
-      0.1,
-      2000
-    );
-    orthoCam.position.set(0, 500, 0);
-    orthoCam.lookAt(0, 0, 0);
-
-    // Active camera bookkeeping
-    let activeCam: THREE.Camera = perspCam;
-    const camPos = new THREE.Vector3().copy(perspCam.position);
-    const camTarget = new THREE.Vector3(0, 0, 0);
-
-    // ── Lighting ──
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
-    scene.add(ambientLight);
-
-    const dirLight = new THREE.DirectionalLight(0xfff5e6, 1.0);
-    dirLight.position.set(150, 300, 200);
-    dirLight.castShadow = true;
-    dirLight.shadow.mapSize.set(1024, 1024);
-    dirLight.shadow.camera.near = 10;
-    dirLight.shadow.camera.far = 800;
-    dirLight.shadow.camera.left = -300;
-    dirLight.shadow.camera.right = 300;
-    dirLight.shadow.camera.top = 300;
-    dirLight.shadow.camera.bottom = -300;
-    scene.add(dirLight);
-
-    const hemisphereLight = new THREE.HemisphereLight(0xc8d5b9, 0x8b9c7a, 0.4);
-    scene.add(hemisphereLight);
-
-    // ── Ground plane ──
-    const groundGeo = new THREE.PlaneGeometry(800, 800);
-    const groundMat = new THREE.MeshLambertMaterial({ color: 0xc8d5b9 });
-    const ground = new THREE.Mesh(groundGeo, groundMat);
-    ground.rotation.x = -Math.PI / 2;
-    ground.receiveShadow = true;
-    scene.add(ground);
-
-    // ── Grid overlay (road network) ──
-    const gridHelper = new THREE.GridHelper(800, 40, 0xb0bfa8, 0xc0ccb8);
-    gridHelper.position.y = 0.1;
-    scene.add(gridHelper);
-
-    // ── Procedural buildings ──
-    const buildingGroup = new THREE.Group();
-    const edgeMat = new THREE.LineBasicMaterial({
-      color: 0xaaaaaa,
-      transparent: true,
-      opacity: 0.25,
+    const map = new mapboxgl.Map({
+      container: containerRef.current,
+      style: TACTICAL_STYLE,
+      center: routeCenter(tacticalRoute),
+      zoom: 15.7,
+      pitch: 56,
+      bearing: 0,
+      antialias: true,
+      attributionControl: false,
+      failIfMajorPerformanceCaveat: false,
     });
 
-    for (let i = 0; i < 45; i++) {
-      const w = 8 + Math.random() * 16;
-      const d = 8 + Math.random() * 16;
-      const h = 20 + Math.random() * 100;
-      const bx = (Math.random() - 0.5) * 600;
-      const bz = (Math.random() - 0.5) * 600;
+    mapRef.current = map;
+    map.addControl(new mapboxgl.AttributionControl({ compact: true }), "bottom-right");
 
-      // Skip if too close to center (leave room for landmarks)
-      if (Math.abs(bx) < 50 && Math.abs(bz) < 50) continue;
-
-      const geo = new THREE.BoxGeometry(w, h, d);
-      const color =
-        BUILDING_COLORS[Math.floor(Math.random() * BUILDING_COLORS.length)];
-      const mat = new THREE.MeshLambertMaterial({ color });
-      const mesh = new THREE.Mesh(geo, mat);
-      mesh.position.set(bx, h / 2, bz);
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      buildingGroup.add(mesh);
-
-      // Edge outlines
-      const edges = new THREE.EdgesGeometry(geo);
-      const line = new THREE.LineSegments(edges, edgeMat);
-      line.position.copy(mesh.position);
-      buildingGroup.add(line);
-    }
-    scene.add(buildingGroup);
-
-    // ── Landmark buildings ──
-    // KICC – tall cylinder
-    const kiccGeo = new THREE.CylinderGeometry(10, 12, 140, 24);
-    const kiccMat = new THREE.MeshLambertMaterial({ color: 0xd5cfc5 });
-    const kicc = new THREE.Mesh(kiccGeo, kiccMat);
-    kicc.position.set(15, 70, -10);
-    kicc.castShadow = true;
-    scene.add(kicc);
-
-    // Times Tower – tall thin box
-    const ttGeo = new THREE.BoxGeometry(14, 130, 14);
-    const ttMat = new THREE.MeshLambertMaterial({ color: 0xc8c2b8 });
-    const tt = new THREE.Mesh(ttGeo, ttMat);
-    tt.position.set(-40, 65, 30);
-    tt.castShadow = true;
-    scene.add(tt);
-
-    // Kenyatta Conference – dome
-    const domeGeo = new THREE.SphereGeometry(22, 32, 16, 0, Math.PI * 2, 0, Math.PI / 2);
-    const domeMat = new THREE.MeshLambertMaterial({ color: 0xe0ddd5 });
-    const dome = new THREE.Mesh(domeGeo, domeMat);
-    dome.position.set(50, 0, 50);
-    dome.castShadow = true;
-    scene.add(dome);
-
-    // ── Animated highway (Waiyaki Way / Expressway) ──
-    const highwayCurve = new THREE.CatmullRomCurve3([
-      new THREE.Vector3(-350, 0.5, -80),
-      new THREE.Vector3(-150, 0.5, -60),
-      new THREE.Vector3(0, 0.5, -30),
-      new THREE.Vector3(150, 0.5, -50),
-      new THREE.Vector3(350, 0.5, -90),
-    ]);
-    // Road surface
-    const tubeGeo = new THREE.TubeGeometry(highwayCurve, 80, 5, 4, false);
-    const tubeMat = new THREE.MeshLambertMaterial({
-      color: 0x999999,
-      transparent: true,
-      opacity: 0.45,
-    });
-    const tube = new THREE.Mesh(tubeGeo, tubeMat);
-    scene.add(tube);
-
-    // Cars
-    const carGroup = new THREE.Group();
-    const carColors = [0x3b82f6, 0xef4444, 0xfbbf24, 0x10b981, 0xf97316];
-    interface Car {
-      mesh: THREE.Mesh;
-      t: number;
-      speed: number;
-    }
-    const cars: Car[] = [];
-    for (let c = 0; c < 12; c++) {
-      const carGeo = new THREE.BoxGeometry(4, 2.5, 3);
-      const carMat = new THREE.MeshLambertMaterial({
-        color: carColors[c % carColors.length],
-      });
-      const carMesh = new THREE.Mesh(carGeo, carMat);
-      carMesh.castShadow = true;
-      carGroup.add(carMesh);
-      cars.push({ mesh: carMesh, t: Math.random(), speed: 0.02 + Math.random() * 0.03 });
-    }
-    scene.add(carGroup);
-
-    // ── Drone ──
-    const droneGroup = new THREE.Group();
-
-    // Body sphere
-    const droneGeo = new THREE.SphereGeometry(5, 16, 16);
-    const droneMat = new THREE.MeshPhongMaterial({
-      color: 0xe65328,
-      emissive: 0xe65328,
-      emissiveIntensity: 0.3,
-    });
-    const droneMesh = new THREE.Mesh(droneGeo, droneMat);
-    droneGroup.add(droneMesh);
-
-    // Pulsing glow ring
-    const glowRingGeo = new THREE.RingGeometry(6, 9, 32);
-    const glowRingMat = new THREE.MeshBasicMaterial({
-      color: 0xe65328,
-      transparent: true,
-      opacity: 0.4,
-      side: THREE.DoubleSide,
-    });
-    const glowRing = new THREE.Mesh(glowRingGeo, glowRingMat);
-    glowRing.rotation.x = -Math.PI / 2;
-    droneGroup.add(glowRing);
-
-    // Vertical light beam below drone
-    const beamGeo = new THREE.CylinderGeometry(1.5, 3, 60, 8, 1, true);
-    const beamMat = new THREE.MeshBasicMaterial({
-      color: 0xe65328,
-      transparent: true,
-      opacity: 0.12,
-      side: THREE.DoubleSide,
-    });
-    const beam = new THREE.Mesh(beamGeo, beamMat);
-    beam.position.y = -30;
-    droneGroup.add(beam);
-
-    scene.add(droneGroup);
-
-    // ── Target marker ──
-    const targetRingGeo = new THREE.RingGeometry(7, 10, 32);
-    const targetRingMat = new THREE.MeshBasicMaterial({
-      color: 0x22c55e,
-      transparent: true,
-      opacity: 0.6,
-      side: THREE.DoubleSide,
-    });
-    const targetRing = new THREE.Mesh(targetRingGeo, targetRingMat);
-    targetRing.rotation.x = -Math.PI / 2;
-    targetRing.position.y = 0.5;
-    scene.add(targetRing);
-
-    // Inner ring
-    const targetInnerGeo = new THREE.RingGeometry(3, 5, 32);
-    const targetInnerMat = new THREE.MeshBasicMaterial({
-      color: 0x22c55e,
-      transparent: true,
-      opacity: 0.4,
-      side: THREE.DoubleSide,
-    });
-    const targetInner = new THREE.Mesh(targetInnerGeo, targetInnerMat);
-    targetInner.rotation.x = -Math.PI / 2;
-    targetInner.position.y = 0.5;
-    scene.add(targetInner);
-
-    // ── Radar sweep wedge (for 2D mode) ──
-    const radarGeo = new THREE.CircleGeometry(350, 32, 0, Math.PI / 4);
-    const radarMat = new THREE.MeshBasicMaterial({
-      color: 0x22c55e,
-      transparent: true,
-      opacity: 0.0,
-      side: THREE.DoubleSide,
-    });
-    const radarSweep = new THREE.Mesh(radarGeo, radarMat);
-    radarSweep.rotation.x = -Math.PI / 2;
-    radarSweep.position.y = 1;
-    scene.add(radarSweep);
-
-    // Radar range circles
-    const radarCircles: THREE.LineLoop[] = [];
-    [100, 200, 300].forEach((r) => {
-      const circGeo = new THREE.BufferGeometry();
-      const circPoints: THREE.Vector3[] = [];
-      for (let i = 0; i <= 64; i++) {
-        const angle = (i / 64) * Math.PI * 2;
-        circPoints.push(
-          new THREE.Vector3(Math.cos(angle) * r, 0.2, Math.sin(angle) * r)
-        );
+    const resizeObserver = new ResizeObserver(() => {
+      map.resize();
+      if (map.loaded()) {
+        setMapReady(true);
+        mapReadyRef.current = true;
       }
-      circGeo.setFromPoints(circPoints);
-      const circLine = new THREE.LineLoop(
-        circGeo,
-        new THREE.LineBasicMaterial({
-          color: 0x22c55e,
-          transparent: true,
-          opacity: 0.0,
-        })
-      );
-      scene.add(circLine);
-      radarCircles.push(circLine);
+    });
+    resizeObserver.observe(containerRef.current);
+    requestAnimationFrame(() => {
+      map.resize();
+      map.triggerRepaint();
     });
 
-    // ── Animation ──
-    const clock = new THREE.Clock();
-    let animFrameId: number;
+    const droneMarker = new mapboxgl.Marker({
+      element: createDroneElement(),
+      anchor: "center",
+      rotationAlignment: "map",
+      pitchAlignment: "map",
+    }).setLngLat([dronePosition.lng, dronePosition.lat]);
+    droneMarker.addTo(map);
+    droneMarkerRef.current = droneMarker;
 
-    const animate = () => {
-      animFrameId = requestAnimationFrame(animate);
-      const elapsed = clock.getElapsedTime();
-      const dt = clock.getDelta();
-      const state = stateRef.current;
-      const is3D = state.viewMode === "3D";
+    const targetMarker = new mapboxgl.Marker({
+      element: createTargetElement(),
+      anchor: "bottom",
+    }).setLngLat([targetPosition.lng, targetPosition.lat]);
+    targetMarker.addTo(map);
+    targetMarkerRef.current = targetMarker;
 
-      // ── Camera transition ──
-      const targetCamPos = is3D
-        ? new THREE.Vector3(
-            200 * Math.cos(elapsed * 0.05),
-            260,
-            200 * Math.sin(elapsed * 0.05) + 120
-          )
-        : new THREE.Vector3(0, 500, 0.01);
-
-      camPos.lerp(targetCamPos, 0.02);
-
-      if (is3D) {
-        perspCam.position.copy(camPos);
-        perspCam.lookAt(camTarget);
-        activeCam = perspCam;
-      } else {
-        orthoCam.position.copy(camPos);
-        orthoCam.lookAt(camTarget);
-        activeCam = orthoCam;
+    const syncLayers = () => {
+      try {
+        addTacticalSourcesAndLayers(map, latestDataRef.current);
+        setError(null);
+      } catch (err) {
+        console.error("Mapbox tactical layer setup failed:", err);
+        setError("Mapbox loaded, but the 3D building/route layers failed to initialize.");
       }
-
-      // ── Drone position ──
-      const [dx, dz] = geoToScene(state.dronePosition.lat, state.dronePosition.lng);
-      const droneAlt = Math.max(state.dronePosition.alt * 0.5, 30);
-      droneGroup.position.set(dx, droneAlt, dz);
-
-      // Drone hover bob
-      droneMesh.position.y = Math.sin(elapsed * 3) * 1.5;
-
-      // Glow ring pulse
-      const pulse = 0.3 + Math.sin(elapsed * 4) * 0.2;
-      glowRingMat.opacity = pulse;
-      const ringScale = 1 + Math.sin(elapsed * 4) * 0.15;
-      glowRing.scale.set(ringScale, ringScale, 1);
-
-      // Beam shimmer
-      beamMat.opacity = 0.08 + Math.sin(elapsed * 2) * 0.04;
-      beam.position.y = -droneAlt / 2;
-      beam.scale.y = droneAlt / 60;
-
-      // ── Target position ──
-      const [tx, tz] = geoToScene(state.targetPosition.lat, state.targetPosition.lng);
-      targetRing.position.set(tx, 0.5, tz);
-      targetInner.position.set(tx, 0.5, tz);
-
-      // Target pulse
-      const tPulse = 0.4 + Math.sin(elapsed * 3) * 0.25;
-      targetRingMat.opacity = tPulse;
-      const tScale = 1 + Math.sin(elapsed * 3) * 0.1;
-      targetRing.scale.set(tScale, tScale, 1);
-
-      // ── Cars ──
-      cars.forEach((car) => {
-        car.t = (car.t + car.speed * 0.01) % 1;
-        const pos = highwayCurve.getPointAt(car.t);
-        const tangent = highwayCurve.getTangentAt(car.t);
-        car.mesh.position.copy(pos);
-        car.mesh.position.y = 2;
-        car.mesh.lookAt(pos.clone().add(tangent));
-      });
-
-      // ── Radar sweep (2D mode) ──
-      const radarTargetOpacity = is3D ? 0.0 : 0.08;
-      radarMat.opacity += (radarTargetOpacity - radarMat.opacity) * 0.05;
-      radarSweep.rotation.y = elapsed * 1.2;
-
-      radarCircles.forEach((c) => {
-        const mat = c.material as THREE.LineBasicMaterial;
-        const circTarget = is3D ? 0.0 : 0.15;
-        mat.opacity += (circTarget - mat.opacity) * 0.05;
-      });
-
-      // ── Fog density transition ──
-      if (scene.fog instanceof THREE.FogExp2) {
-        const fogTarget = is3D ? 0.0012 : 0.0002;
-        scene.fog.density += (fogTarget - scene.fog.density) * 0.02;
-      }
-
-      // ── Buildings: flatten in 2D ──
-      buildingGroup.children.forEach((child) => {
-        if (child instanceof THREE.Mesh) {
-          const targetScaleY = is3D ? 1 : 0.05;
-          child.scale.y += (targetScaleY - child.scale.y) * 0.04;
-        }
-      });
-
-      // ── Grid prominence in 2D ──
-      const gridMat = gridHelper.material as THREE.Material;
-      const gridTargetOpacity = is3D ? 0.3 : 0.8;
-      if ("opacity" in gridMat) {
-        gridMat.transparent = true;
-        (gridMat as THREE.LineBasicMaterial).opacity +=
-          (gridTargetOpacity - (gridMat as THREE.LineBasicMaterial).opacity) * 0.03;
-      }
-
-      renderer.render(scene, activeCam);
+      setLoading(false);
     };
 
-    animate();
-
-    // ── Resize handler ──
-    const onResize = () => {
-      const w = container.clientWidth;
-      const h = container.clientHeight;
-      renderer.setSize(w, h);
-      const a = w / h;
-      perspCam.aspect = a;
-      perspCam.updateProjectionMatrix();
-      orthoCam.left = -orthoHalf * a;
-      orthoCam.right = orthoHalf * a;
-      orthoCam.top = orthoHalf;
-      orthoCam.bottom = -orthoHalf;
-      orthoCam.updateProjectionMatrix();
+    const onError = (event: mapboxgl.ErrorEvent) => {
+      console.error("Mapbox runtime error:", event.error);
+      const message = event.error?.message ?? "";
+      if (/401|403|token|unauthorized|forbidden/i.test(message)) {
+        setError("Mapbox rejected the access token or style request. Check NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN and token URL restrictions.");
+      } else if (!mapReadyRef.current) {
+        setError(message || "Mapbox failed before the map finished loading.");
+      }
+      setLoading(false);
     };
 
-    const resizeObserver = new ResizeObserver(onResize);
-    resizeObserver.observe(container);
+    const onRenderReady = () => {
+      if (!map.loaded()) return;
+      map.resize();
+      setError(null);
+      setLoading(false);
+      setMapReady(true);
+      mapReadyRef.current = true;
+    };
 
-    // ── Cleanup ──
+    map.on("load", syncLayers);
+    map.on("style.load", syncLayers);
+    map.on("idle", onRenderReady);
+    map.on("error", onError);
+
+    const loadTimeout = window.setTimeout(() => {
+      if (mapReadyRef.current) return;
+      setLoading(false);
+      setError("Mapbox did not finish rendering. Check browser console/network for blocked Mapbox style, sprite, glyph, or tile requests.");
+    }, 8000);
+
     return () => {
-      cancelAnimationFrame(animFrameId);
+      window.clearTimeout(loadTimeout);
+      map.off("load", syncLayers);
+      map.off("style.load", syncLayers);
+      map.off("idle", onRenderReady);
+      map.off("error", onError);
+      droneMarker.remove();
+      targetMarker.remove();
       resizeObserver.disconnect();
-      renderer.dispose();
-      scene.clear();
-      if (container.contains(renderer.domElement)) {
-        container.removeChild(renderer.domElement);
-      }
+      map.remove();
+      mapRef.current = null;
+      droneMarkerRef.current = null;
+      targetMarkerRef.current = null;
     };
+    // Initial map creation only; data/camera updates are handled separately.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
-    const cleanup = setupScene();
-    return cleanup;
-  }, [setupScene]);
+    const map = mapRef.current;
+    if (!map || !map.isStyleLoaded()) return;
+
+    setSourceData(map, SOURCE_ROUTE, routeData);
+    setSourceData(map, SOURCE_TRAVELED, traveledData);
+    setSourceData(map, SOURCE_WAYPOINTS, waypointData);
+    setSourceData(map, SOURCE_HEADING, headingData);
+  }, [headingData, routeData, traveledData, waypointData]);
+
+  useEffect(() => {
+    droneMarkerRef.current?.setLngLat([dronePosition.lng, dronePosition.lat]);
+    targetMarkerRef.current?.setLngLat([targetPosition.lng, targetPosition.lat]);
+
+    const el = droneMarkerRef.current?.getElement();
+    if (el) {
+      el.style.setProperty("--drone-heading", `${heading}deg`);
+      const altitude = el.querySelector<HTMLSpanElement>("[data-altitude]");
+      if (altitude) altitude.textContent = `${Math.round(dronePosition.alt)}m`;
+    }
+  }, [dronePosition, heading, targetPosition]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    const target = followCameraTarget(dronePosition);
+    map.easeTo({
+      center: target.center,
+      zoom: target.zoom,
+      pitch: target.pitch,
+      bearing: target.bearing,
+      duration: 650,
+      essential: true,
+    });
+  }, [dronePosition]);
 
   return (
-    <div
-      ref={containerRef}
-      className="w-full h-full"
-      style={{ minHeight: "200px" }}
-    />
+    <div className="relative w-full h-full bg-[#edf1f3]" style={{ minHeight: "200px" }}>
+      <div ref={containerRef} className="pocket-mapbox absolute inset-0 h-full w-full bg-[#edf1f3]" />
+      {(loading || error || !mapReady) && (
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-[#edf1f3] text-slate-600">
+          <div className="max-w-xs text-center px-5">
+            {loading || (!error && !mapReady) ? (
+              <>
+                <div className="w-8 h-8 border-3 border-[#e65328] border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+                <p className="text-xs font-bold uppercase tracking-widest">Loading Mapbox 3D city</p>
+              </>
+            ) : (
+              <>
+                <p className="text-sm font-bold text-slate-800 mb-1">3D map unavailable</p>
+                <p className="text-xs leading-relaxed">{error}</p>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
   );
+}
+
+function addTacticalSourcesAndLayers(
+  map: MapboxMap,
+  data: {
+    routeData: FeatureCollection<LineFeature>;
+    traveledData: FeatureCollection<LineFeature>;
+    waypointData: FeatureCollection<PointFeature>;
+    headingData: FeatureCollection<LineFeature>;
+  }
+) {
+  addBuildingExtrusions(map);
+  addGeoJsonSource(map, SOURCE_ROUTE, data.routeData);
+  addGeoJsonSource(map, SOURCE_TRAVELED, data.traveledData);
+  addGeoJsonSource(map, SOURCE_WAYPOINTS, data.waypointData);
+  addGeoJsonSource(map, SOURCE_HEADING, data.headingData);
+
+  if (!map.getLayer("route-corridor")) {
+    map.addLayer({
+      id: "route-corridor",
+      type: "line",
+      source: SOURCE_ROUTE,
+      layout: { "line-cap": "round", "line-join": "round" },
+      paint: { "line-color": "#00c7e6", "line-width": 5, "line-opacity": 0.82 },
+    });
+  }
+
+  if (!map.getLayer("route-traveled")) {
+    map.addLayer({
+      id: "route-traveled",
+      type: "line",
+      source: SOURCE_TRAVELED,
+      layout: { "line-cap": "round", "line-join": "round" },
+      paint: { "line-color": "#e65328", "line-width": 7, "line-opacity": 0.92 },
+    });
+  }
+
+  if (!map.getLayer("drone-heading")) {
+    map.addLayer({
+      id: "drone-heading",
+      type: "line",
+      source: SOURCE_HEADING,
+      layout: { "line-cap": "round", "line-join": "round" },
+      paint: {
+        "line-color": "#e65328",
+        "line-width": 3,
+        "line-opacity": 0.7,
+        "line-dasharray": [1.5, 1.2],
+      },
+    });
+  }
+
+  if (!map.getLayer("waypoints")) {
+    map.addLayer({
+      id: "waypoints",
+      type: "circle",
+      source: SOURCE_WAYPOINTS,
+      paint: {
+        "circle-radius": ["case", ["==", ["get", "active"], true], 6, 4],
+        "circle-color": ["case", ["==", ["get", "active"], true], "#e65328", "#0f766e"],
+        "circle-stroke-color": "#ffffff",
+        "circle-stroke-width": 2,
+        "circle-opacity": 0.95,
+      },
+    });
+  }
+}
+
+function addBuildingExtrusions(map: MapboxMap) {
+  if (map.getLayer("3d-buildings") || !map.getSource("composite")) return;
+
+  const labelLayerId = map.getStyle().layers?.find(
+    (layer) => layer.type === "symbol" && typeof layer.layout?.["text-field"] !== "undefined"
+  )?.id;
+
+  try {
+    map.addLayer({
+      id: "3d-buildings",
+      source: "composite",
+      "source-layer": "building",
+      type: "fill-extrusion",
+      minzoom: 14,
+      paint: {
+        "fill-extrusion-color": "#9ca3af",
+        "fill-extrusion-height": ["coalesce", ["get", "height"], 20],
+        "fill-extrusion-base": ["coalesce", ["get", "min_height"], 0],
+        "fill-extrusion-opacity": 0.65,
+        "fill-extrusion-vertical-gradient": true,
+      },
+    }, labelLayerId);
+  } catch (err) {
+    console.warn("Unable to add Mapbox building extrusions:", err);
+  }
+}
+
+function addGeoJsonSource(
+  map: MapboxMap,
+  sourceId: string,
+  data: FeatureCollection<LineFeature | PointFeature>
+) {
+  if (map.getSource(sourceId)) {
+    setSourceData(map, sourceId, data);
+    return;
+  }
+
+  map.addSource(sourceId, { type: "geojson", data });
+}
+
+function setSourceData(
+  map: MapboxMap,
+  sourceId: string,
+  data: FeatureCollection<LineFeature | PointFeature>
+) {
+  const source = map.getSource(sourceId);
+  if (source && "setData" in source) {
+    (source as GeoJSONSource).setData(data);
+  }
+}
+
+function routeFeatureCollection(route: RoutePoint[]): FeatureCollection<LineFeature> {
+  return {
+    type: "FeatureCollection",
+    features: [{
+      type: "Feature",
+      properties: {},
+      geometry: { type: "LineString", coordinates: route.map(pointToCoord) },
+    }],
+  };
+}
+
+function waypointFeatureCollection(route: RoutePoint[], activeWaypointIndex: number): FeatureCollection<PointFeature> {
+  return {
+    type: "FeatureCollection",
+    features: route.map((point, index) => ({
+      type: "Feature",
+      properties: { active: index === activeWaypointIndex },
+      geometry: { type: "Point", coordinates: pointToCoord(point) },
+    })),
+  };
+}
+
+function headingFeatureCollection(
+  dronePosition: { lat: number; lng: number; alt: number },
+  heading: number
+): FeatureCollection<LineFeature> {
+  const nose = offsetPoint(dronePosition, heading, 95);
+  return {
+    type: "FeatureCollection",
+    features: [{
+      type: "Feature",
+      properties: {},
+      geometry: {
+        type: "LineString",
+        coordinates: [[dronePosition.lng, dronePosition.lat], [nose.lng, nose.lat]],
+      },
+    }],
+  };
+}
+
+function followCameraTarget(
+  dronePosition: { lat: number; lng: number; alt: number }
+) {
+  return {
+    center: [dronePosition.lng, dronePosition.lat] as LngLatLike,
+    zoom: 16.1,
+    pitch: 56,
+    bearing: 0,
+  };
+}
+
+function createDroneElement(): HTMLDivElement {
+  const wrapper = document.createElement("div");
+  wrapper.className = "relative flex h-14 w-14 items-center justify-center";
+  wrapper.style.setProperty("--drone-heading", "0deg");
+  wrapper.innerHTML = `
+    <div class="absolute h-14 w-14 rounded-full bg-[#e65328]/20 animate-ping"></div>
+    <div class="relative flex h-10 w-10 items-center justify-center rounded-full border-2 border-white bg-[#e65328] shadow-[0_6px_18px_rgba(230,83,40,0.45)]" style="transform: rotate(var(--drone-heading));">
+      <div class="h-1 w-7 rounded-full bg-white"></div>
+      <div class="absolute h-7 w-1 rounded-full bg-white"></div>
+      <div class="absolute h-2 w-2 rounded-full bg-slate-900"></div>
+    </div>
+    <span data-altitude class="absolute -bottom-3 rounded-full bg-white/90 px-1.5 py-0.5 text-[9px] font-bold text-slate-700 shadow">0m</span>
+  `;
+  return wrapper;
+}
+
+function createTargetElement(): HTMLDivElement {
+  const wrapper = document.createElement("div");
+  wrapper.className = "flex flex-col items-center";
+  wrapper.innerHTML = `
+    <div class="h-8 w-8 rounded-full border-2 border-white bg-emerald-500 shadow-[0_4px_14px_rgba(16,185,129,0.4)]"></div>
+    <div class="mt-1 h-2 w-2 rounded-full bg-emerald-500/70"></div>
+  `;
+  return wrapper;
+}
+
+function routeCenter(route: RoutePoint[]): LngLatLike {
+  const points = route.length > 0 ? route : [BASE_POSITION];
+  return [
+    points.reduce((sum, point) => sum + point.lng, 0) / points.length,
+    points.reduce((sum, point) => sum + point.lat, 0) / points.length,
+  ];
+}
+
+function pointToCoord(point: { lat: number; lng: number }): Coord {
+  return [point.lng, point.lat];
+}
+
+function offsetPoint(point: { lat: number; lng: number }, headingDeg: number, meters: number) {
+  const earthRadius = 6378137;
+  const heading = headingDeg * Math.PI / 180;
+  const lat1 = point.lat * Math.PI / 180;
+  const lng1 = point.lng * Math.PI / 180;
+  const angularDistance = meters / earthRadius;
+
+  const lat2 = Math.asin(
+    Math.sin(lat1) * Math.cos(angularDistance) +
+    Math.cos(lat1) * Math.sin(angularDistance) * Math.cos(heading)
+  );
+  const lng2 = lng1 + Math.atan2(
+    Math.sin(heading) * Math.sin(angularDistance) * Math.cos(lat1),
+    Math.cos(angularDistance) - Math.sin(lat1) * Math.sin(lat2)
+  );
+
+  return { lat: lat2 * 180 / Math.PI, lng: lng2 * 180 / Math.PI };
 }

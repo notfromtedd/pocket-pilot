@@ -39,7 +39,20 @@ export default function ProductManager() {
     setLoading(false);
   };
 
-  useEffect(() => { fetchProducts(); }, []);
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadProducts() {
+      const res = await fetch("/api/products");
+      const data = await res.json();
+      if (cancelled) return;
+      if (data.success) setProducts(data.products);
+      setLoading(false);
+    }
+
+    loadProducts();
+    return () => { cancelled = true; };
+  }, []);
 
   const resetForm = () => {
     setName(""); setDescription(""); setCategory("first_aid");

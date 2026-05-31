@@ -103,7 +103,7 @@ export async function POST(request: Request) {
 
         throw new Error("Claude failed to generate a structured ticket.");
 
-    } catch(err: any) {
+    } catch(err: unknown) {
         console.error("Dispatch API Error:", err);
         return NextResponse.json({ success: false, error: "AI Dispatch Failed" }, { status: 500 });
     }

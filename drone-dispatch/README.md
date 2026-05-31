@@ -17,6 +17,16 @@ NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_your-key
 
 Supabase also still supports legacy anon JWT keys. If your project uses a legacy key, place it in `NEXT_PUBLIC_SUPABASE_ANON_KEY` instead. Apply `schema.sql` in your Supabase SQL editor before using the app so the `products`, `orders`, `tickets`, `customers`, and `drone_telemetry` tables exist.
 
+## Mapbox Tactical 3D Admin Map
+
+The admin dispatch view uses Mapbox GL JS for a clean tactical 3D city map with gray building extrusions:
+
+```bash
+NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN=pk.your-mapbox-token
+```
+
+Create a public Mapbox token with style/tiles access enabled. The admin map defaults to `mapbox://styles/mapbox/light-v11`, injects a `fill-extrusion` building layer from Mapbox's vector building source, and can switch to `satellite-streets-v12` from the admin toolbar.
+
 ## Email Verification Setup
 
 Customer sign-in uses Supabase email OTP codes. In Supabase Dashboard, enable email auth and update the auth email template so it contains the 6-digit token:

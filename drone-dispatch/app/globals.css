@@ -79,16 +79,6 @@ body {
   animation: shimmer 2s linear infinite;
 }
 
-/* ── Radar sweep for 2D tactical mode ── */
-@keyframes radar-sweep {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
-}
-
-.radar-sweep {
-  animation: radar-sweep 4s linear infinite;
-}
-
 /* ── Override Leaflet z-index for Next.js ── */
 .leaflet-pane {
   z-index: 1 !important;
@@ -96,4 +86,15 @@ body {
 .leaflet-top,
 .leaflet-bottom {
   z-index: 2 !important;
+}
+
+.pocket-mapbox,
+.pocket-mapbox .mapboxgl-canvas-container,
+.pocket-mapbox .mapboxgl-canvas {
+  height: 100% !important;
+  width: 100% !important;
+}
+
+.pocket-mapbox .mapboxgl-canvas {
+  display: block;
 }

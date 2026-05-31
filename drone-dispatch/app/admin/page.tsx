@@ -4,8 +4,9 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import dynamic from "next/dynamic";
 import { supabase } from "../lib/supabase";
 import {
-  createFlightPlan, interpolatePosition, remainingDistance,
+  createFlightPlan, haversineDistance, interpolatePosition, remainingDistance,
   isWithinSMSRange, formatDistance, formatTime,
+  type FlightPhase, type RoutePoint,
 } from "../lib/simulator";
 import ProductManager from "../components/ProductManager";
 import RevenuePanel from "../components/RevenuePanel";
@@ -29,13 +30,16 @@ interface Ticket {
 
 type DroneState = "IDLE" | "AIRBORNE" | "DELIVERED" | "OVERRIDE";
 type AdminTab = "dispatch" | "products" | "revenue";
+type UrgencyLevel = "STANDARD" | "HIGH" | "CRITICAL";
+
+const TELEMETRY_UPDATE_MS = 250;
+const SIMULATION_TIME_SCALE = 8;
 
 export default function AdminControlCenter() {
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
   const [adminTab, setAdminTab] = useState<AdminTab>("dispatch");
 
-  const [viewMode, setViewMode] = useState<"3D" | "2D">("3D");
   const [droneState, setDroneState] = useState<DroneState>("IDLE");
   const [dronePosition, setDronePosition] = useState({ lat: -1.2921, lng: 36.8219, alt: 0 });
   const [flightProgress, setFlightProgress] = useState(0);
@@ -43,6 +47,10 @@ export default function AdminControlCenter() {
   const [flightLogs, setFlightLogs] = useState<string[]>([]);
   const [elapsedTime, setElapsedTime] = useState(0);
   const [currentSpeed, setCurrentSpeed] = useState(0);
+  const [currentPhase, setCurrentPhase] = useState<FlightPhase>("LAUNCH");
+  const [currentHeading, setCurrentHeading] = useState(0);
+  const [activeWaypointIndex, setActiveWaypointIndex] = useState(0);
+  const [routePath, setRoutePath] = useState<RoutePoint[]>([]);
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -50,6 +58,11 @@ export default function AdminControlCenter() {
   const logsEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { logsEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [flightLogs]);
+
+  const addLog = useCallback((msg: string) => {
+    const ts = new Date().toLocaleTimeString("en-US", { hour12: false });
+    setFlightLogs((prev) => [...prev, `[${ts}] ${msg}`]);
+  }, []);
 
   // ── Supabase realtime ──
   useEffect(() => {
@@ -92,17 +105,119 @@ export default function AdminControlCenter() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const addLog = useCallback((msg: string) => {
-    const ts = new Date().toLocaleTimeString("en-US", { hour12: false });
-    setFlightLogs((prev) => [...prev, `[${ts}] ${msg}`]);
+  const applyTelemetry = useCallback((t: {
+    lat: number;
+    lng: number;
+    alt?: number;
+    battery?: number;
+    speed?: number;
+    heading?: number;
+    phase?: FlightPhase;
+    active_waypoint_index?: number;
+    route_path?: RoutePoint[];
+  }) => {
+    if (!t.lat || !t.lng) return;
+    setDronePosition({ lat: t.lat, lng: t.lng, alt: t.alt ?? 0 });
+    setBattery(t.battery ?? 100);
+    setCurrentSpeed(t.speed ?? 0);
+    setCurrentHeading(t.heading ?? 0);
+    setActiveWaypointIndex(t.active_waypoint_index ?? 0);
+    if (Array.isArray(t.route_path) && t.route_path.length > 0) setRoutePath(t.route_path);
+    if (t.phase) setCurrentPhase(t.phase);
   }, []);
+
+  useEffect(() => {
+    if (!selectedTicket) return;
+
+    const fetchLatestTelemetry = async () => {
+      const { data } = await supabase
+        .from("drone_telemetry")
+        .select("*")
+        .eq("ticket_id", selectedTicket.id)
+        .maybeSingle();
+
+      if (data) {
+        applyTelemetry(data as {
+          lat: number;
+          lng: number;
+          alt: number;
+          battery: number;
+          speed: number;
+          heading: number;
+          phase: FlightPhase;
+          active_waypoint_index: number;
+          route_path: RoutePoint[];
+        });
+        if (selectedTicket.status === "IN_FLIGHT") setDroneState("AIRBORNE");
+        if (selectedTicket.status === "DELIVERED") setDroneState("DELIVERED");
+      } else {
+        setDronePosition({ lat: -1.2921, lng: 36.8219, alt: 0 });
+        setBattery(100);
+        setCurrentSpeed(0);
+        setCurrentHeading(0);
+        setActiveWaypointIndex(0);
+        setRoutePath([]);
+        setCurrentPhase("LAUNCH");
+      }
+    };
+
+    fetchLatestTelemetry();
+
+    const telCh = supabase
+      .channel(`admin-telemetry-${selectedTicket.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "drone_telemetry",
+          filter: `ticket_id=eq.${selectedTicket.id}`,
+        },
+        (payload) => {
+          applyTelemetry(payload.new as {
+            lat: number;
+            lng: number;
+            alt: number;
+            battery: number;
+            speed: number;
+            heading: number;
+            phase: FlightPhase;
+            active_waypoint_index: number;
+            route_path: RoutePoint[];
+          });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(telCh);
+    };
+  }, [selectedTicket, applyTelemetry]);
 
   // ── Flight sim ──
   const handleLaunchVector = useCallback(async () => {
     if (!selectedTicket || droneState === "AIRBORNE") return;
+    const commandRes = await fetch("/api/missions/command", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ticket_id: selectedTicket.id,
+        order_id: selectedTicket.order_id,
+        command: "launch",
+        source: "admin",
+      }),
+    });
+    const commandData = await commandRes.json().catch(() => null);
+    if (!commandRes.ok || commandData?.accepted === false) {
+      addLog(`⚠️ Launch denied — ${commandData?.reason || commandData?.error || "mission command rejected"}`);
+      return;
+    }
+
     setDroneState("AIRBORNE");
     setFlightProgress(0);
     setElapsedTime(0);
+    setCurrentPhase("LAUNCH");
+    setActiveWaypointIndex(0);
     smsSentRef.current = false;
     addLog("🚀 Launch vector approved. Drone ascending...");
 
@@ -111,13 +226,24 @@ export default function AdminControlCenter() {
       await supabase.from("orders").update({ status: "IN_FLIGHT" }).eq("id", selectedTicket.order_id);
     }
 
-    const plan = createFlightPlan({ lat: selectedTicket.latitude, lng: selectedTicket.longitude });
+    const plan = createFlightPlan(
+      { lat: selectedTicket.latitude, lng: selectedTicket.longitude },
+      { urgencyLevel: (selectedTicket.urgency_level as UrgencyLevel) || "STANDARD" }
+    );
+    setRoutePath(plan.routePath);
+    setCurrentHeading(0);
+    const estimatedFlightSeconds = Math.max(
+      35,
+      haversineDistance(plan.origin, plan.destination) / (plan.maxSpeed * 1000 / 3600)
+    );
     let progress = 0;
+    const loggedMilestones = new Set<number>();
+    let lastPhase: FlightPhase | null = null;
 
     timerRef.current = setInterval(() => setElapsedTime((t) => t + 1), 1000);
 
     intervalRef.current = setInterval(async () => {
-      progress += 0.003;
+      progress += ((TELEMETRY_UPDATE_MS / 1000) * SIMULATION_TIME_SCALE) / estimatedFlightSeconds;
       if (progress > 1) progress = 1;
 
       const vec = interpolatePosition(plan, progress);
@@ -127,17 +253,33 @@ export default function AdminControlCenter() {
       setFlightProgress(Math.round(progress * 100));
       setBattery(Math.round(vec.battery));
       setCurrentSpeed(Math.round(vec.speed));
+      setCurrentHeading(Math.round(vec.heading));
+      setCurrentPhase(vec.phase);
+      setActiveWaypointIndex(vec.activeWaypointIndex);
 
       await supabase.from("drone_telemetry").upsert({
         ticket_id: selectedTicket.id,
+        order_id: selectedTicket.order_id,
         lat: vec.lat, lng: vec.lng, alt: vec.alt,
         battery: Math.round(vec.battery), speed: Math.round(vec.speed), heading: Math.round(vec.heading),
-      });
+        phase: vec.phase,
+        active_waypoint_index: vec.activeWaypointIndex,
+        route_path: plan.routePath,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "ticket_id" });
 
       const pct = Math.round(progress * 100);
-      if (pct === 25) addLog("📍 25% — Transit corridor");
-      if (pct === 50) addLog("📍 50% — Peak altitude");
-      if (pct === 75) addLog("📍 75% — Descent approach");
+      [25, 50, 75].forEach((milestone) => {
+        if (pct >= milestone && !loggedMilestones.has(milestone)) {
+          loggedMilestones.add(milestone);
+          addLog(`📍 ${milestone}% — ${milestone === 75 ? "Descent approach" : milestone === 50 ? "Cruise corridor" : "Climb corridor"}`);
+        }
+      });
+
+      if (vec.phase !== lastPhase) {
+        lastPhase = vec.phase;
+        addLog(`🛰️ Phase transition — ${vec.phase}`);
+      }
 
       if (!smsSentRef.current && isWithinSMSRange({ lat: vec.lat, lng: vec.lng }, plan.destination)) {
         smsSentRef.current = true;
@@ -153,13 +295,15 @@ export default function AdminControlCenter() {
         clearInterval(intervalRef.current!);
         clearInterval(timerRef.current!);
         setDroneState("DELIVERED");
+        setCurrentPhase("DELIVERED");
+        setActiveWaypointIndex(plan.routePath.length - 1);
         addLog("✅ Payload delivered.");
         await supabase.from("tickets").update({ status: "DELIVERED" }).eq("id", selectedTicket.id);
         if (selectedTicket.order_id) {
           await supabase.from("orders").update({ status: "DELIVERED" }).eq("id", selectedTicket.order_id);
         }
       }
-    }, 100);
+    }, TELEMETRY_UPDATE_MS);
   }, [selectedTicket, droneState, addLog]);
 
   useEffect(() => {
@@ -182,8 +326,8 @@ export default function AdminControlCenter() {
 
   return (
     <div className="relative h-screen w-full bg-[#f0f2f5] text-[#2d3748] font-sans antialiased overflow-hidden flex flex-col">
-      <div className="absolute inset-0 bg-gradient-to-tr from-[#dfebd4] via-[#e2e9e1] to-[#f3e7dc] z-0" />
-      <div className="absolute top-[-10%] right-[20%] w-[500px] h-[500px] bg-[#cbdcc1] rounded-full blur-[120px] opacity-50 mix-blend-multiply z-0 pointer-events-none" />
+      <div className="absolute inset-0 bg-linear-to-tr from-[#dfebd4] via-[#e2e9e1] to-[#f3e7dc] z-0" />
+      <div className="absolute top-[-10%] right-[20%] w-125 h-125 bg-[#cbdcc1] rounded-full blur-[120px] opacity-50 mix-blend-multiply z-0 pointer-events-none" />
 
       {/* Top Admin Tab Bar */}
       <div className="relative z-10 px-3 pt-3">
@@ -246,10 +390,9 @@ export default function AdminControlCenter() {
           {/* Viewport */}
           <div className="w-[55%] h-full flex flex-col gap-3">
             <div className="bg-white/40 backdrop-blur-xl border border-white/60 rounded-2xl px-4 py-2.5 flex items-center justify-between shadow-[0_4px_16px_-4px_rgba(0,0,0,0.04)]">
-              <div className="flex bg-white/60 border border-white/80 p-0.5 rounded-full">
-                {(["3D", "2D"] as const).map((m) => (
-                  <button key={m} onClick={() => setViewMode(m)} className={`px-3 py-1 rounded-full text-[10px] font-bold tracking-wider cursor-pointer transition-colors ${viewMode === m ? "bg-slate-800 text-white" : "text-slate-500"}`}>{m === "3D" ? "3D REALISTIC" : "2D TACTICAL"}</button>
-                ))}
+              <div className="flex items-center gap-2">
+                <div className="bg-slate-800 text-white px-3 py-1.5 rounded-full text-[10px] font-bold tracking-wider">3D REALISTIC</div>
+                <div className="bg-[#e65328] text-white px-2.5 py-1 rounded-full text-[9px] font-bold tracking-wider uppercase">Follow</div>
               </div>
               <div className="flex items-center gap-2">
                 <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[9px] font-bold uppercase tracking-wider ${
@@ -264,7 +407,13 @@ export default function AdminControlCenter() {
 
             <div className="flex-1 bg-white/40 backdrop-blur-xl border border-white/60 rounded-3xl overflow-hidden shadow-[0_8px_32px_-8px_rgba(0,0,0,0.06)]">
               {selectedTicket ? (
-                <FPVMap dronePosition={dronePosition} targetPosition={{ lat: selectedTicket.latitude, lng: selectedTicket.longitude }} viewMode={viewMode} />
+                <FPVMap
+                  dronePosition={dronePosition}
+                  targetPosition={{ lat: selectedTicket.latitude, lng: selectedTicket.longitude }}
+                  routePath={routePath}
+                  heading={currentHeading}
+                  activeWaypointIndex={activeWaypointIndex}
+                />
               ) : (
                 <div className="w-full h-full flex items-center justify-center text-slate-400">
                   <div className="text-center"><span className="text-2xl block mb-2">⛛</span><p className="text-xs font-bold uppercase tracking-widest">System Standby</p></div>
@@ -277,7 +426,7 @@ export default function AdminControlCenter() {
                 <div className="h-full progress-shimmer rounded-full transition-all duration-300" style={{ width: `${flightProgress}%` }} />
               </div>
               <div className="flex justify-between text-[9px] font-bold uppercase tracking-wider text-slate-500">
-                <span>Progress: {flightProgress}%</span><span>Distance: {distanceToTarget}</span><span>Speed: {currentSpeed} km/h</span>
+                <span>Progress: {flightProgress}%</span><span>Waypoint: {activeWaypointIndex}/{Math.max(routePath.length - 1, 0)}</span><span>Distance: {distanceToTarget}</span><span>Speed: {currentSpeed} km/h</span>
               </div>
             </div>
           </div>
@@ -322,7 +471,7 @@ export default function AdminControlCenter() {
                 <div className="grid grid-cols-2 gap-2 mb-3">
                   {[
                     { label: "Battery", value: `${battery}%`, color: battery > 50 ? "text-emerald-600" : battery > 25 ? "text-orange-500" : "text-red-500" },
-                    { label: "Signal", value: "-42dBm", color: "text-slate-700" },
+                    { label: "Phase", value: currentPhase, color: "text-slate-700" },
                     { label: "Altitude", value: `${Math.round(dronePosition.alt)}m`, color: "text-slate-700" },
                     { label: "Speed", value: `${currentSpeed}`, color: "text-slate-700" },
                   ].map((m) => (

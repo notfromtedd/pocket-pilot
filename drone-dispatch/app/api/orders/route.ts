@@ -49,7 +49,7 @@ export async function POST(request: Request) {
     items.some((i: { priority_level?: string }) => i.priority_level === 'CRITICAL') ? 'CRITICAL' :
     items.some((i: { priority_level?: string }) => i.priority_level === 'HIGH') ? 'HIGH' : 'STANDARD';
 
-  await supabase.from('tickets').insert({
+  const { data: ticket, error: ticketError } = await supabase.from('tickets').insert({
     customer_name: customer_name || 'Customer',
     customer_phone: delivery_phone || '',
     payload_item: payloadSummary.substring(0, 100),
@@ -59,9 +59,13 @@ export async function POST(request: Request) {
     longitude: delivery_lng || 36.8220,
     status: 'PENDING',
     order_id: order.id,
-  });
+  }).select().single();
 
-  return NextResponse.json({ success: true, order });
+  if (ticketError || !ticket) {
+    return NextResponse.json({ success: false, error: ticketError?.message || 'Failed to create ticket' }, { status: 500 });
+  }
+
+  return NextResponse.json({ success: true, order, ticket });
 }
 
 export async function GET(request: Request) {

@@ -31,6 +31,13 @@ interface CartItem {
   quantity: number;
 }
 
+interface DroneTelemetry {
+  lat: number;
+  lng: number;
+  battery: number;
+  speed: number;
+}
+
 const STATUS_STEPS = [
   { key: "pending_admin", label: "Ordered", icon: "📋" },
   { key: "launched", label: "Launched", icon: "🚀" },
@@ -63,7 +70,7 @@ export default function CustomerView() {
   const [checkingOut, setCheckingOut] = useState(false);
 
   // GPS
-  const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [coords, setCoords] = useState<{ lat: number; lng: number } | null>({ lat: -1.2880, lng: 36.8220 });
 
   // Tracking
   const [trackingMode, setTrackingMode] = useState(false);
@@ -72,6 +79,7 @@ export default function CustomerView() {
   const [battery, setBattery] = useState(100);
   const [speed, setSpeed] = useState(0);
   const [trackingOrderId, setTrackingOrderId] = useState<string | null>(null);
+  const [trackingTicketId, setTrackingTicketId] = useState<string | null>(null);
 
   // ── Auth check ──
   useEffect(() => {
@@ -85,30 +93,63 @@ export default function CustomerView() {
   // ── GPS ──
   useEffect(() => {
     if ("geolocation" in navigator) {
-      navigator.geolocation.getCurrentPosition(
-        (pos) => setCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
-        () => setCoords({ lat: -1.2880, lng: 36.8220 })
-      );
-    } else {
-      setCoords({ lat: -1.2880, lng: 36.8220 });
+      navigator.geolocation.getCurrentPosition((pos) => {
+        setCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+      });
     }
   }, []);
 
   // ── Realtime subscriptions for tracking ──
   useEffect(() => {
-    if (!trackingMode) return;
+    if (!trackingMode || !trackingOrderId) return;
+
+    const applyTelemetry = (t: DroneTelemetry) => {
+      if (t.lat && t.lng) {
+        setDronePosition({ lat: t.lat, lng: t.lng });
+        setBattery(t.battery);
+        setSpeed(t.speed);
+        setFlightStatus("airborne");
+      }
+    };
+
+    const fetchLatestTelemetry = async () => {
+      const { data } = await supabase
+        .from("drone_telemetry")
+        .select("lat,lng,battery,speed,ticket_id")
+        .eq("order_id", trackingOrderId)
+        .maybeSingle();
+
+      if (data) {
+        applyTelemetry(data as DroneTelemetry);
+        const ticketId = (data as { ticket_id?: string }).ticket_id;
+        if (ticketId) setTrackingTicketId(ticketId);
+      }
+    };
+
+    fetchLatestTelemetry();
 
     const telCh = supabase
-      .channel("cust-tel")
-      .on("postgres_changes", { event: "*", schema: "public", table: "drone_telemetry" }, (p) => {
-        const t = p.new as { lat: number; lng: number; battery: number; speed: number };
-        if (t.lat && t.lng) { setDronePosition({ lat: t.lat, lng: t.lng }); setBattery(t.battery); setSpeed(t.speed); }
+      .channel(`cust-tel-${trackingOrderId}`)
+      .on("postgres_changes", {
+        event: "*",
+        schema: "public",
+        table: "drone_telemetry",
+        filter: `order_id=eq.${trackingOrderId}`,
+      }, (p) => {
+        const t = p.new as DroneTelemetry & { ticket_id?: string };
+        applyTelemetry(t);
+        if (t.ticket_id) setTrackingTicketId(t.ticket_id);
       })
       .subscribe();
 
     const tickCh = supabase
-      .channel("cust-tick")
-      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "tickets" }, (p) => {
+      .channel(`cust-tick-${trackingOrderId}`)
+      .on("postgres_changes", {
+        event: "UPDATE",
+        schema: "public",
+        table: "tickets",
+        filter: `order_id=eq.${trackingOrderId}`,
+      }, (p) => {
         const u = p.new as { status: string };
         if (u.status === "IN_FLIGHT") setFlightStatus("airborne");
         if (u.status === "DELIVERED") setFlightStatus("delivered");
@@ -116,7 +157,7 @@ export default function CustomerView() {
       .subscribe();
 
     return () => { supabase.removeChannel(telCh); supabase.removeChannel(tickCh); };
-  }, [trackingMode]);
+  }, [trackingMode, trackingOrderId]);
 
   // ── Cart operations ──
   const addToCart = useCallback((product: Product) => {
@@ -164,6 +205,7 @@ export default function CustomerView() {
         setCart([]);
         setCartOpen(false);
         setTrackingOrderId(data.order.id);
+        setTrackingTicketId(data.ticket?.id || null);
         setFlightStatus("pending_admin");
         setTrackingMode(true);
       }
@@ -194,6 +236,7 @@ export default function CustomerView() {
       const data = await res.json();
       if (data.success) {
         setTrackingOrderId(data.order.id);
+        setTrackingTicketId(data.ticket?.id || null);
         setFlightStatus("pending_admin");
         setTrackingMode(true);
       }
@@ -205,6 +248,7 @@ export default function CustomerView() {
   // ── Track from order history ──
   const handleTrackOrder = (orderId: string) => {
     setTrackingOrderId(orderId);
+    setTrackingTicketId(null);
     setFlightStatus("pending_admin");
     setTrackingMode(true);
   };
@@ -225,13 +269,14 @@ export default function CustomerView() {
       <div className="relative h-screen w-full bg-[#f0f2f5] flex flex-col font-sans antialiased overflow-hidden">
         <div className="flex-[0_0_60%] relative">
           <GlovoMapWrapper dronePosition={dronePosition} targetPosition={targetPos} customerPosition={targetPos} />
-          <button onClick={() => { setTrackingMode(false); setFlightStatus("idle"); setDronePosition(null); }}
+          <button onClick={() => { setTrackingMode(false); setFlightStatus("idle"); setDronePosition(null); setTrackingTicketId(null); }}
             className="absolute top-4 left-4 z-20 bg-white/80 backdrop-blur-md border border-white/60 rounded-full w-10 h-10 flex items-center justify-center shadow-md cursor-pointer hover:bg-white">
             <span className="text-sm">←</span>
           </button>
           {trackingOrderId && (
             <div className="absolute top-4 right-4 z-20 bg-white/80 backdrop-blur-md border border-white/60 rounded-full px-4 py-2 shadow-md">
               <p className="text-[10px] font-bold text-slate-600 uppercase tracking-wider">ORD-{trackingOrderId.substring(0, 6).toUpperCase()}</p>
+              {trackingTicketId && <p className="text-[8px] font-bold text-slate-400 uppercase tracking-wider">FLT-{trackingTicketId.substring(0, 5).toUpperCase()}</p>}
             </div>
           )}
         </div>
