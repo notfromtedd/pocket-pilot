@@ -196,7 +196,12 @@ export default function AdminControlCenter() {
 
   // ── Flight sim ──
   const handleLaunchVector = useCallback(async () => {
-    if (!selectedTicket || droneState === "AIRBORNE") return;
+    if (!selectedTicket || selectedTicket.status === "DELIVERED" || droneState === "DELIVERED") return;
+    if (intervalRef.current) clearInterval(intervalRef.current);
+    if (timerRef.current) clearInterval(timerRef.current);
+    intervalRef.current = null;
+    timerRef.current = null;
+
     const commandRes = await fetch("/api/missions/command", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -205,6 +210,7 @@ export default function AdminControlCenter() {
         order_id: selectedTicket.order_id,
         command: "launch",
         source: "admin",
+        payload: { reset: selectedTicket.status === "IN_FLIGHT" },
       }),
     });
     const commandData = await commandRes.json().catch(() => null);
@@ -213,15 +219,40 @@ export default function AdminControlCenter() {
       return;
     }
 
-    setDroneState("AIRBORNE");
+    const resetLaunch = selectedTicket.status === "IN_FLIGHT";
+    if (resetLaunch) {
+      addLog("↻ Resetting stale in-flight telemetry for demo launch...");
+      await supabase.from("drone_telemetry").upsert({
+        ticket_id: selectedTicket.id,
+        order_id: selectedTicket.order_id,
+        lat: -1.2921,
+        lng: 36.8219,
+        alt: 0,
+        battery: 100,
+        speed: 0,
+        heading: 0,
+        phase: "LAUNCH",
+        active_waypoint_index: 0,
+        route_path: [],
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "ticket_id" });
+    }
+
     setFlightProgress(0);
     setElapsedTime(0);
+    setDronePosition({ lat: -1.2921, lng: 36.8219, alt: 0 });
+    setBattery(100);
+    setCurrentSpeed(0);
+    setCurrentHeading(0);
     setCurrentPhase("LAUNCH");
     setActiveWaypointIndex(0);
+    setRoutePath([]);
+    setDroneState("AIRBORNE");
     smsSentRef.current = false;
     addLog("🚀 Launch vector approved. Drone ascending...");
 
     await supabase.from("tickets").update({ status: "IN_FLIGHT" }).eq("id", selectedTicket.id);
+    setSelectedTicket((curr) => curr?.id === selectedTicket.id ? { ...curr, status: "IN_FLIGHT" } : curr);
     if (selectedTicket.order_id) {
       await supabase.from("orders").update({ status: "IN_FLIGHT" }).eq("id", selectedTicket.order_id);
     }
@@ -492,9 +523,9 @@ export default function AdminControlCenter() {
                 </div>
 
                 <div className="space-y-2">
-                  <button onClick={handleLaunchVector} disabled={droneState === "AIRBORNE" || droneState === "DELIVERED"}
+                  <button onClick={handleLaunchVector} disabled={droneState === "DELIVERED" || selectedTicket.status === "DELIVERED"}
                     className="w-full bg-[#e65328] hover:bg-[#d4431b] cursor-pointer text-white font-semibold py-3 rounded-2xl text-[10px] tracking-wider uppercase shadow-[0_4px_12px_rgba(230,83,40,0.25)] transition-all disabled:opacity-50 disabled:cursor-not-allowed">
-                    {droneState === "AIRBORNE" ? "Vector Airborne" : droneState === "DELIVERED" ? "Delivered ✓" : "Approve & Launch Vector"}
+                    {droneState === "DELIVERED" || selectedTicket.status === "DELIVERED" ? "Delivered ✓" : selectedTicket.status === "IN_FLIGHT" ? "Reset & Relaunch Vector" : "Approve & Launch Vector"}
                   </button>
                   <button onClick={() => { if (intervalRef.current) clearInterval(intervalRef.current); if (timerRef.current) clearInterval(timerRef.current); setDroneState("OVERRIDE"); addLog("⚠️ Override engaged."); }}
                     className="w-full bg-red-600/10 hover:bg-red-600 cursor-pointer hover:text-white text-red-600 border border-red-200 hover:border-red-600 font-bold py-2.5 rounded-2xl text-[9px] tracking-wider uppercase transition-all">

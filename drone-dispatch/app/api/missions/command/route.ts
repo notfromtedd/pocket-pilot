@@ -60,7 +60,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const rejection = validateCommand(command, ticket.status);
+  const rejection = validateCommand(command, ticket.status, payload);
 
   const { data: event, error: eventError } = await supabase
     .from("mission_events")
@@ -111,17 +111,19 @@ export async function POST(request: Request) {
   return NextResponse.json({ success: true, accepted: true, event });
 }
 
-function validateCommand(command: string, ticketStatus: string): string | null {
-  if (command === "launch" && ticketStatus !== "PENDING") {
-    return "Launch is only allowed for pending missions.";
+function validateCommand(command: string, ticketStatus: string, payload: { reset?: boolean }): string | null {
+  if (ticketStatus === "DELIVERED") {
+    return "Delivered missions cannot accept new control commands.";
+  }
+
+  if (command === "launch") {
+    if (ticketStatus === "PENDING") return null;
+    if (payload.reset === true && ticketStatus === "IN_FLIGHT") return null;
+    return "Launch is only allowed for pending missions, or stale in-flight demo missions with reset enabled.";
   }
 
   if (["hold", "reroute", "return_to_base", "land"].includes(command) && ticketStatus !== "IN_FLIGHT") {
     return `${command} is only allowed while the mission is in flight.`;
-  }
-
-  if (ticketStatus === "DELIVERED") {
-    return "Delivered missions cannot accept new control commands.";
   }
 
   return null;

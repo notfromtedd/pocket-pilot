@@ -30,7 +30,7 @@ type FeatureCollection<T extends LineFeature | PointFeature> = {
 };
 
 const BASE_POSITION: RoutePoint = { lat: -1.2921, lng: 36.8219, alt: 8, kind: "base" };
-const TACTICAL_STYLE = "mapbox://styles/mapbox/light-v11";
+const TACTICAL_STYLE = "mapbox://styles/mapbox/streets-v12";
 const SOURCE_ROUTE = "pocket-route";
 const SOURCE_TRAVELED = "pocket-route-traveled";
 const SOURCE_WAYPOINTS = "pocket-waypoints";

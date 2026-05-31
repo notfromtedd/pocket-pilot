@@ -306,7 +306,7 @@ export default function CustomerView() {
           </div>
 
           <div className="flex-1 flex items-center gap-4">
-            <div className="flex-shrink-0 relative w-16 h-16">
+            <div className="shrink-0 relative w-16 h-16">
               <svg className="w-16 h-16 -rotate-90" viewBox="0 0 64 64">
                 <circle cx="32" cy="32" r="28" fill="none" stroke="#e2e8f0" strokeWidth="4" />
                 <circle cx="32" cy="32" r="28" fill="none" stroke={battery > 50 ? "#10b981" : battery > 25 ? "#f59e0b" : "#ef4444"} strokeWidth="4" strokeDasharray={`${(battery / 100) * 175.9} 175.9`} strokeLinecap="round" />
@@ -350,7 +350,7 @@ export default function CustomerView() {
 
   return (
     <div className="relative min-h-screen bg-[#f0f2f5] font-sans antialiased">
-      <div className="absolute inset-0 bg-gradient-to-tr from-[#dfebd4] via-[#e2e9e1] to-[#f3e7dc] z-0" />
+      <div className="absolute inset-0 bg-linear-to-tr from-[#dfebd4] via-[#e2e9e1] to-[#f3e7dc] z-0" />
 
       <div className="relative z-10 max-w-md mx-auto px-4 pb-6">
         {/* Header */}
