@@ -26,6 +26,7 @@ interface Ticket {
   status: string;
   sms_sent?: boolean;
   order_id?: string;
+  call_transcript?: string;
 }
 
 type DroneState = "IDLE" | "AIRBORNE" | "DELIVERED" | "OVERRIDE";
@@ -35,7 +36,7 @@ type AIWaypoint = { lat: number; lng: number; alt: number; reason?: string };
 type AIPlan = { altitude: number; reason: string; avoided_risks: string[]; confidence: number; validated: boolean; waypoints: AIWaypoint[] };
 
 const TELEMETRY_UPDATE_MS = 250;
-const SIMULATION_TIME_SCALE = 2;
+const SIMULATION_TIME_SCALE = 8;
 const DEFAULT_FOLLOW_ZOOM = 17.0;
 const DEFAULT_DEMO_CRUISE_ALTITUDE = 140;
 
@@ -82,6 +83,7 @@ export default function AdminControlCenter() {
   const [aiPlan, setAiPlan] = useState<AIPlan | null>(null);
   const [aiPlanLoading, setAiPlanLoading] = useState(false);
   const [isAiRoute, setIsAiRoute] = useState(false);
+  const [aiPlanModalOpen, setAiPlanModalOpen] = useState(false);
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -612,6 +614,12 @@ export default function AdminControlCenter() {
                     <p className="text-[9px] uppercase font-bold text-slate-400 tracking-wider">Summary</p>
                     <p className="text-[10px] text-slate-600 leading-relaxed">{selectedTicket.incident_summary}</p>
                   </div>
+                  {selectedTicket.call_transcript && (
+                    <div className="bg-orange-50/60 border border-orange-100 rounded-xl p-2.5">
+                      <p className="text-[8px] uppercase font-bold text-orange-400 tracking-widest mb-1">🎙 Call Transcript</p>
+                      <p className="text-[9px] text-slate-600 italic leading-relaxed line-clamp-4">"{selectedTicket.call_transcript}"</p>
+                    </div>
+                  )}
                   <div className="flex justify-between">
                     <div>
                       <p className="text-[9px] uppercase font-bold text-slate-400 tracking-wider">Customer</p>
@@ -668,28 +676,20 @@ export default function AdminControlCenter() {
                   <div className="bg-white/50 border border-emerald-200 rounded-xl p-3 mb-3">
                     <div className="flex items-center justify-between mb-1.5">
                       <p className="text-[8px] font-bold text-slate-400 uppercase tracking-widest">AI Route Plan</p>
-                      <span className={`text-[8px] font-bold px-1.5 py-0.5 rounded-full ${aiPlan.confidence >= 80 ? "bg-emerald-100 text-emerald-600" : "bg-orange-100 text-orange-600"}`}>
-                        {aiPlan.confidence}% conf
-                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <span className={`text-[8px] font-bold px-1.5 py-0.5 rounded-full ${aiPlan.confidence >= 80 ? "bg-emerald-100 text-emerald-600" : "bg-orange-100 text-orange-600"}`}>
+                          {aiPlan.confidence}% conf
+                        </span>
+                        <button onClick={() => setAiPlanModalOpen(true)} className="text-[8px] font-bold text-purple-500 hover:text-purple-700 cursor-pointer px-1.5 py-0.5 bg-purple-50 hover:bg-purple-100 rounded-full transition-colors" title="Expand">
+                          ↗ Full
+                        </button>
+                      </div>
                     </div>
                     <div className="flex items-baseline gap-1.5 mb-1">
                       <span className="text-sm font-mono font-bold text-slate-700">{aiPlan.altitude}m</span>
                       <span className="text-[8px] text-emerald-600 font-bold">✓ validated</span>
                     </div>
-                    <p className="text-[9px] text-slate-600 leading-relaxed mb-1">{aiPlan.reason}</p>
-                    {aiPlan.avoided_risks.map((risk, i) => (
-                      <p key={i} className="text-[8px] text-slate-400">⚠ {risk}</p>
-                    ))}
-                    {aiPlan.waypoints.length > 0 && (
-                      <div className="mt-1.5 pt-1.5 border-t border-slate-100 space-y-0.5">
-                        <p className="text-[8px] font-bold text-purple-400 uppercase tracking-widest">{aiPlan.waypoints.length} AI Waypoints</p>
-                        {aiPlan.waypoints.map((wp, i) => (
-                          <p key={i} className="text-[8px] text-slate-500">
-                            WP{i + 1} · {wp.alt}m{wp.reason ? ` — ${wp.reason}` : ""}
-                          </p>
-                        ))}
-                      </div>
-                    )}
+                    <p className="text-[9px] text-slate-600 leading-relaxed line-clamp-2">{aiPlan.reason}</p>
                   </div>
                 )}
 
@@ -744,6 +744,73 @@ export default function AdminControlCenter() {
         <div className="relative z-10 flex-1 p-3 overflow-y-auto">
           <div className="max-w-2xl mx-auto bg-white/40 backdrop-blur-xl border border-white/60 rounded-3xl p-6 shadow-[0_8px_32px_-8px_rgba(0,0,0,0.06)]">
             <RevenuePanel />
+          </div>
+        </div>
+      )}
+
+      {/* ── AI PLAN MODAL ── */}
+      {aiPlanModalOpen && aiPlan && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-black/40 backdrop-blur-sm" onClick={() => setAiPlanModalOpen(false)}>
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            {/* Header */}
+            <div className="bg-linear-to-r from-purple-600 to-violet-500 rounded-t-3xl p-6 text-white">
+              <div className="flex items-start justify-between mb-3">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-widest opacity-75 mb-1">AI Route Plan</p>
+                  <h2 className="text-2xl font-bold font-mono">{aiPlan.altitude}m cruise altitude</h2>
+                </div>
+                <div className="flex flex-col items-end gap-2">
+                  <span className={`text-xs font-bold px-3 py-1 rounded-full ${aiPlan.confidence >= 80 ? "bg-white/30 text-white" : "bg-orange-200/30 text-orange-100"}`}>
+                    {aiPlan.confidence}% confidence
+                  </span>
+                  <span className="text-xs px-2.5 py-0.5 rounded-full bg-white/20 font-bold">✓ Validated</span>
+                </div>
+              </div>
+              <p className="text-sm leading-relaxed opacity-90">{aiPlan.reason}</p>
+            </div>
+
+            <div className="p-6 space-y-5">
+              {/* Avoided risks */}
+              {aiPlan.avoided_risks.length > 0 && (
+                <div>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">Avoided Risks</p>
+                  <div className="space-y-1.5">
+                    {aiPlan.avoided_risks.map((risk, i) => (
+                      <div key={i} className="flex items-start gap-2 bg-red-50 border border-red-100 rounded-xl px-3 py-2">
+                        <span className="text-red-400 mt-0.5 shrink-0">⚠</span>
+                        <p className="text-xs text-red-700">{risk}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Waypoints */}
+              {aiPlan.waypoints.length > 0 && (
+                <div>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">{aiPlan.waypoints.length} AI Waypoints</p>
+                  <div className="space-y-2">
+                    {aiPlan.waypoints.map((wp, i) => (
+                      <div key={i} className="bg-purple-50 border border-purple-100 rounded-xl p-3">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[10px] font-bold text-purple-600 uppercase tracking-widest">WP{i + 1}</span>
+                          <span className="text-sm font-mono font-bold text-slate-700">{wp.alt}m</span>
+                        </div>
+                        <p className="text-[10px] font-mono text-slate-500 mb-1">{wp.lat.toFixed(5)}, {wp.lng.toFixed(5)}</p>
+                        {wp.reason && <p className="text-xs text-slate-600 leading-relaxed">{wp.reason}</p>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <button
+                onClick={() => setAiPlanModalOpen(false)}
+                className="w-full bg-slate-800 hover:bg-slate-700 text-white font-bold py-3 rounded-2xl text-sm tracking-wider transition-colors cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
           </div>
         </div>
       )}

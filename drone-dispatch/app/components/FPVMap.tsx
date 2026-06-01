@@ -490,7 +490,7 @@ function addBuildingExtrusions(map: MapboxMap) {
         "fill-extrusion-color": "#9ca3af",
         "fill-extrusion-height": ["coalesce", ["get", "height"], 20],
         "fill-extrusion-base": ["coalesce", ["get", "min_height"], 0],
-        "fill-extrusion-opacity": 0.65,
+        "fill-extrusion-opacity": 0.85,
         "fill-extrusion-vertical-gradient": true,
       },
     }, labelLayerId);

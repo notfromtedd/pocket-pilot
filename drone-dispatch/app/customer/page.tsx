@@ -81,6 +81,8 @@ export default function CustomerView() {
   const [trackingOrderId, setTrackingOrderId] = useState<string | null>(null);
   const [trackingTicketId, setTrackingTicketId] = useState<string | null>(null);
   const [routePath, setRoutePath] = useState<{ lat: number; lng: number }[]>([]);
+  const [activeWaypointIndex, setActiveWaypointIndex] = useState(0);
+  const [isAiRoute] = useState(false); // future: read from telemetry
 
   // ── Auth check ──
   useEffect(() => {
@@ -101,16 +103,15 @@ export default function CustomerView() {
   }, []);
 
   // ── Shared telemetry applier (component level so both effects can use it) ──
-  const applyTelemetry = useCallback((t: DroneTelemetry & { route_path?: { lat: number; lng: number }[] }) => {
+  const applyTelemetry = useCallback((t: DroneTelemetry & { route_path?: { lat: number; lng: number }[]; active_waypoint_index?: number }) => {
     if (t.lat && t.lng) {
       setDronePosition({ lat: t.lat, lng: t.lng });
       setBattery(t.battery);
       setSpeed(t.speed);
       setFlightStatus("airborne");
     }
-    if (Array.isArray(t.route_path) && t.route_path.length > 1) {
-      setRoutePath(t.route_path);
-    }
+    if (Array.isArray(t.route_path) && t.route_path.length > 1) setRoutePath(t.route_path);
+    if (typeof t.active_waypoint_index === "number") setActiveWaypointIndex(t.active_waypoint_index);
   }, []);
 
   // ── Tracking: order-level subscriptions (status + order_id fallback telemetry) ──
@@ -131,7 +132,7 @@ export default function CustomerView() {
 
       // 2. Fetch telemetry: ticket_id is the reliable key (admin upserts by it);
       //    fall back to order_id for older rows
-      const sel = "lat,lng,battery,speed,ticket_id,route_path";
+      const sel = "lat,lng,battery,speed,ticket_id,route_path,active_waypoint_index";
       const { data } = await (
         ticketId
           ? supabase.from("drone_telemetry").select(sel).eq("ticket_id", ticketId).maybeSingle()
@@ -308,8 +309,8 @@ export default function CustomerView() {
     return (
       <div className="relative h-screen w-full bg-[#f0f2f5] flex flex-col font-sans antialiased overflow-hidden">
         <div className="flex-[0_0_60%] relative">
-          <GlovoMapWrapper dronePosition={dronePosition} targetPosition={targetPos} customerPosition={targetPos} routePath={routePath} />
-          <button onClick={() => { setTrackingMode(false); setFlightStatus("idle"); setDronePosition(null); setTrackingTicketId(null); setRoutePath([]); }}
+          <GlovoMapWrapper dronePosition={dronePosition} targetPosition={targetPos} customerPosition={targetPos} routePath={routePath} activeWaypointIndex={activeWaypointIndex} isAiRoute={isAiRoute} />
+          <button onClick={() => { setTrackingMode(false); setFlightStatus("idle"); setDronePosition(null); setTrackingTicketId(null); setRoutePath([]); setActiveWaypointIndex(0); }}
             className="absolute top-4 left-4 z-20 bg-white/80 backdrop-blur-md border border-white/60 rounded-full w-10 h-10 flex items-center justify-center shadow-md cursor-pointer hover:bg-white">
             <span className="text-sm">←</span>
           </button>
@@ -450,8 +451,15 @@ export default function CustomerView() {
           <EmergencyPanel
             userPhone={user?.phone || ""}
             userName={user?.fullName || ""}
+            userId={user?.id || null}
             coords={coords}
             onEmergencySubmit={handleEmergencySubmit}
+            onVoiceDispatched={(orderId, ticketId) => {
+              setTrackingOrderId(orderId);
+              setTrackingTicketId(ticketId);
+              setFlightStatus("pending_admin");
+              setTrackingMode(true);
+            }}
           />
         )}
       </div>

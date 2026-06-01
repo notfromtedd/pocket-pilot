@@ -3,6 +3,20 @@
 import { useState, useEffect } from "react";
 import { supabase } from "../lib/supabase";
 
+const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+// Deterministic formatters — same output on server (UTC) and client (any timezone)
+function formatOrderDate(iso: string): string {
+  const d = new Date(iso);
+  const h = d.getUTCHours().toString().padStart(2, "0");
+  const m = d.getUTCMinutes().toString().padStart(2, "0");
+  return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}, ${h}:${m}`;
+}
+
+function formatKsh(amount: number): string {
+  return Math.round(amount).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+}
+
 interface OrderItem {
   id: string;
   product_name: string;
@@ -94,11 +108,7 @@ export default function OrderHistory({ customerId, onTrackOrder }: OrderHistoryP
                   ORD-{order.id.substring(0, 6).toUpperCase()}
                 </span>
               </div>
-              <p className="text-[10px] text-slate-500 mt-0.5">
-                {new Date(order.created_at).toLocaleDateString("en-GB", {
-                  day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit",
-                })}
-              </p>
+              <p className="text-[10px] text-slate-500 mt-0.5">{formatOrderDate(order.created_at)}</p>
             </div>
             <span className={`text-[9px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${statusColor(order.status)}`}>
               {order.status === "IN_FLIGHT" ? "In Flight" : order.status}
@@ -110,14 +120,14 @@ export default function OrderHistory({ customerId, onTrackOrder }: OrderHistoryP
             {order.order_items?.map((item) => (
               <div key={item.id} className="flex justify-between text-xs">
                 <span className="text-slate-600">{item.product_name} × {item.quantity}</span>
-                <span className="text-slate-700 font-medium">KSh {(item.price * item.quantity).toLocaleString()}</span>
+                <span className="text-slate-700 font-medium">KSh {formatKsh(item.price * item.quantity)}</span>
               </div>
             ))}
           </div>
 
           <div className="flex items-center justify-between pt-2 border-t border-slate-200/60">
             <span className="text-xs font-bold text-[#1a202c]">
-              KSh {order.total_price.toLocaleString()}
+              KSh {formatKsh(order.total_price)}
             </span>
             {(order.status === "PENDING" || order.status === "IN_FLIGHT") && (
               <button

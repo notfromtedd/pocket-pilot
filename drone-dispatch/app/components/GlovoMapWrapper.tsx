@@ -18,6 +18,7 @@ interface GlovoMapProps {
   targetPosition: { lat: number; lng: number };
   customerPosition: { lat: number; lng: number };
   routePath?: { lat: number; lng: number }[];
+  activeWaypointIndex?: number;
   isAiRoute?: boolean;
 }
 
