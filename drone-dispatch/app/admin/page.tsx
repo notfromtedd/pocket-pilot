@@ -4,9 +4,9 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import dynamic from "next/dynamic";
 import { supabase } from "../lib/supabase";
 import {
-  createFlightPlan, haversineDistance, interpolatePosition, remainingDistance,
+  createFlightPlan, createRoutePathFromWaypoints, haversineDistance, interpolatePosition, remainingDistance,
   isWithinSMSRange, formatDistance, formatTime,
-  type FlightPhase, type RoutePoint,
+  type FlightPhase, type FlightPlan, type RoutePoint,
 } from "../lib/simulator";
 import ProductManager from "../components/ProductManager";
 import RevenuePanel from "../components/RevenuePanel";
@@ -31,11 +31,34 @@ interface Ticket {
 type DroneState = "IDLE" | "AIRBORNE" | "DELIVERED" | "OVERRIDE";
 type AdminTab = "dispatch" | "products" | "revenue";
 type UrgencyLevel = "STANDARD" | "HIGH" | "CRITICAL";
+type AIWaypoint = { lat: number; lng: number; alt: number; reason?: string };
+type AIPlan = { altitude: number; reason: string; avoided_risks: string[]; confidence: number; validated: boolean; waypoints: AIWaypoint[] };
 
 const TELEMETRY_UPDATE_MS = 250;
-const SIMULATION_TIME_SCALE = 8;
-const DEFAULT_FOLLOW_ZOOM = 16.1;
-const DEFAULT_DEMO_CRUISE_ALTITUDE = 120;
+const SIMULATION_TIME_SCALE = 2;
+const DEFAULT_FOLLOW_ZOOM = 17.0;
+const DEFAULT_DEMO_CRUISE_ALTITUDE = 140;
+
+function estimateProgressFromTelemetry(
+  routePath: RoutePoint[],
+  activeWaypointIndex: number,
+  position: { lat: number; lng: number },
+): number {
+  if (routePath.length < 2) return 0;
+  const segCount = routePath.length - 1;
+  // activeWaypointIndex = segIndex + 1 (from sampleRoute in simulator)
+  const segIndex = Math.min(Math.max(0, activeWaypointIndex - 1), segCount - 1);
+  const a = routePath[segIndex];
+  const b = routePath[Math.min(segIndex + 1, routePath.length - 1)];
+  const ax = b.lng - a.lng;
+  const ay = b.lat - a.lat;
+  const segLenSq = ax * ax + ay * ay;
+  const localT = segLenSq > 0
+    ? Math.max(0, Math.min(1, ((position.lng - a.lng) * ax + (position.lat - a.lat) * ay) / segLenSq))
+    : 0;
+  // Cap at 0.98 so the completion branch doesn't fire immediately on resume
+  return Math.min(0.98, (segIndex + localT) / segCount);
+}
 
 export default function AdminControlCenter() {
   const [tickets, setTickets] = useState<Ticket[]>([]);
@@ -55,6 +78,10 @@ export default function AdminControlCenter() {
   const [routePath, setRoutePath] = useState<RoutePoint[]>([]);
   const [followZoom, setFollowZoom] = useState(DEFAULT_FOLLOW_ZOOM);
   const [demoCruiseAltitude, setDemoCruiseAltitude] = useState(DEFAULT_DEMO_CRUISE_ALTITUDE);
+  const [cameraMode, setCameraMode] = useState<"follow" | "chase">("follow");
+  const [aiPlan, setAiPlan] = useState<AIPlan | null>(null);
+  const [aiPlanLoading, setAiPlanLoading] = useState(false);
+  const [isAiRoute, setIsAiRoute] = useState(false);
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -130,6 +157,88 @@ export default function AdminControlCenter() {
     if (t.phase) setCurrentPhase(t.phase);
   }, []);
 
+  const launchSimulationLoop = useCallback((ticket: Ticket, plan: FlightPlan, initialProgress: number) => {
+    if (intervalRef.current) clearInterval(intervalRef.current);
+    if (timerRef.current) clearInterval(timerRef.current);
+    intervalRef.current = null;
+    timerRef.current = null;
+
+    setRoutePath(plan.routePath);
+    const estimatedFlightSeconds = Math.max(
+      35,
+      haversineDistance(plan.origin, plan.destination) / (plan.maxSpeed * 1000 / 3600)
+    );
+    let progress = initialProgress;
+    const loggedMilestones = new Set<number>();
+    [25, 50, 75].forEach((m) => { if (Math.round(progress * 100) >= m) loggedMilestones.add(m); });
+    let lastPhase: FlightPhase | null = null;
+
+    timerRef.current = setInterval(() => setElapsedTime((t) => t + 1), 1000);
+
+    intervalRef.current = setInterval(async () => {
+      progress += ((TELEMETRY_UPDATE_MS / 1000) * SIMULATION_TIME_SCALE) / estimatedFlightSeconds;
+      if (progress > 1) progress = 1;
+
+      const vec = interpolatePosition(plan, progress);
+      const dist = remainingDistance({ lat: vec.lat, lng: vec.lng }, plan.destination);
+
+      setDronePosition({ lat: vec.lat, lng: vec.lng, alt: vec.alt });
+      setFlightProgress(Math.round(progress * 100));
+      setBattery(Math.round(vec.battery));
+      setCurrentSpeed(Math.round(vec.speed));
+      setCurrentHeading(Math.round(vec.heading));
+      setCurrentPhase(vec.phase);
+      setActiveWaypointIndex(vec.activeWaypointIndex);
+
+      await supabase.from("drone_telemetry").upsert({
+        ticket_id: ticket.id,
+        order_id: ticket.order_id,
+        lat: vec.lat, lng: vec.lng, alt: vec.alt,
+        battery: Math.round(vec.battery), speed: Math.round(vec.speed), heading: Math.round(vec.heading),
+        phase: vec.phase,
+        active_waypoint_index: vec.activeWaypointIndex,
+        route_path: plan.routePath,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "ticket_id" });
+
+      const pct = Math.round(progress * 100);
+      [25, 50, 75].forEach((milestone) => {
+        if (pct >= milestone && !loggedMilestones.has(milestone)) {
+          loggedMilestones.add(milestone);
+          addLog(`📍 ${milestone}% — ${milestone === 75 ? "Descent approach" : milestone === 50 ? "Cruise corridor" : "Climb corridor"}`);
+        }
+      });
+
+      if (vec.phase !== lastPhase) {
+        lastPhase = vec.phase;
+        addLog(`🛰️ Phase transition — ${vec.phase}`);
+      }
+
+      if (!smsSentRef.current && isWithinSMSRange({ lat: vec.lat, lng: vec.lng }, plan.destination)) {
+        smsSentRef.current = true;
+        addLog(`📱 SMS triggered — ${Math.round(dist)}m from target`);
+        fetch("/api/send-sms", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ phone: ticket.customer_phone, customerName: ticket.customer_name, ticketId: ticket.id, distanceMeters: dist }),
+        }).catch(console.error);
+        await supabase.from("tickets").update({ sms_sent: true }).eq("id", ticket.id);
+      }
+
+      if (progress >= 1) {
+        clearInterval(intervalRef.current!);
+        clearInterval(timerRef.current!);
+        setDroneState("DELIVERED");
+        setCurrentPhase("DELIVERED");
+        setActiveWaypointIndex(plan.routePath.length - 1);
+        addLog("✅ Payload delivered.");
+        await supabase.from("tickets").update({ status: "DELIVERED" }).eq("id", ticket.id);
+        if (ticket.order_id) {
+          await supabase.from("orders").update({ status: "DELIVERED" }).eq("id", ticket.order_id);
+        }
+      }
+    }, TELEMETRY_UPDATE_MS);
+  }, [addLog]);
+
   useEffect(() => {
     if (!selectedTicket) return;
 
@@ -141,18 +250,29 @@ export default function AdminControlCenter() {
         .maybeSingle();
 
       if (data) {
-        applyTelemetry(data as {
-          lat: number;
-          lng: number;
-          alt: number;
-          battery: number;
-          speed: number;
-          heading: number;
-          phase: FlightPhase;
-          active_waypoint_index: number;
-          route_path: RoutePoint[];
-        });
-        if (selectedTicket.status === "IN_FLIGHT") setDroneState("AIRBORNE");
+        const tel = data as {
+          lat: number; lng: number; alt: number; battery: number;
+          speed: number; heading: number; phase: FlightPhase;
+          active_waypoint_index: number; route_path: RoutePoint[];
+        };
+        applyTelemetry(tel);
+        if (selectedTicket.status === "IN_FLIGHT") {
+          setDroneState("AIRBORNE");
+          if (!intervalRef.current && tel.route_path?.length > 1) {
+            smsSentRef.current = !!selectedTicket.sms_sent;
+            const resumePlan = createFlightPlan(
+              { lat: selectedTicket.latitude, lng: selectedTicket.longitude },
+              { urgencyLevel: (selectedTicket.urgency_level as UrgencyLevel) || "STANDARD" }
+            );
+            resumePlan.routePath = tel.route_path;
+            const progress = estimateProgressFromTelemetry(
+              tel.route_path, tel.active_waypoint_index, { lat: tel.lat, lng: tel.lng }
+            );
+            setFlightProgress(Math.round(progress * 100));
+            addLog(`↻ Resumed at ${Math.round(progress * 100)}% — continuing from last position`);
+            launchSimulationLoop(selectedTicket, resumePlan, progress);
+          }
+        }
         if (selectedTicket.status === "DELIVERED") setDroneState("DELIVERED");
       } else {
         setDronePosition({ lat: -1.2921, lng: 36.8219, alt: 0 });
@@ -196,7 +316,7 @@ export default function AdminControlCenter() {
     return () => {
       supabase.removeChannel(telCh);
     };
-  }, [selectedTicket, applyTelemetry]);
+  }, [selectedTicket, applyTelemetry, launchSimulationLoop]);
 
   // ── Flight sim ──
   const handleLaunchVector = useCallback(async () => {
@@ -265,85 +385,22 @@ export default function AdminControlCenter() {
       { lat: selectedTicket.latitude, lng: selectedTicket.longitude },
       {
         urgencyLevel: (selectedTicket.urgency_level as UrgencyLevel) || "STANDARD",
-        cruiseAltitude: demoCruiseAltitude,
+        cruiseAltitude: aiPlan?.validated ? aiPlan.altitude : demoCruiseAltitude,
       }
     );
-    setRoutePath(plan.routePath);
+
+    if (aiPlan?.validated && aiPlan.waypoints.length >= 1) {
+      plan.routePath = createRoutePathFromWaypoints(plan.origin, aiPlan.waypoints, plan.destination);
+      setIsAiRoute(true);
+      addLog(`🤖 AI route: ${aiPlan.waypoints.length} waypoints applied`);
+    } else {
+      setIsAiRoute(false);
+      addLog(`↥ Cruise altitude set to ${plan.cruiseAltitude}m.`);
+    }
+
     setCurrentHeading(0);
-    const estimatedFlightSeconds = Math.max(
-      35,
-      haversineDistance(plan.origin, plan.destination) / (plan.maxSpeed * 1000 / 3600)
-    );
-    let progress = 0;
-    const loggedMilestones = new Set<number>();
-    let lastPhase: FlightPhase | null = null;
-    addLog(`↥ Demo cruise altitude set to ${plan.cruiseAltitude}m.`);
-
-    timerRef.current = setInterval(() => setElapsedTime((t) => t + 1), 1000);
-
-    intervalRef.current = setInterval(async () => {
-      progress += ((TELEMETRY_UPDATE_MS / 1000) * SIMULATION_TIME_SCALE) / estimatedFlightSeconds;
-      if (progress > 1) progress = 1;
-
-      const vec = interpolatePosition(plan, progress);
-      const dist = remainingDistance({ lat: vec.lat, lng: vec.lng }, plan.destination);
-
-      setDronePosition({ lat: vec.lat, lng: vec.lng, alt: vec.alt });
-      setFlightProgress(Math.round(progress * 100));
-      setBattery(Math.round(vec.battery));
-      setCurrentSpeed(Math.round(vec.speed));
-      setCurrentHeading(Math.round(vec.heading));
-      setCurrentPhase(vec.phase);
-      setActiveWaypointIndex(vec.activeWaypointIndex);
-
-      await supabase.from("drone_telemetry").upsert({
-        ticket_id: selectedTicket.id,
-        order_id: selectedTicket.order_id,
-        lat: vec.lat, lng: vec.lng, alt: vec.alt,
-        battery: Math.round(vec.battery), speed: Math.round(vec.speed), heading: Math.round(vec.heading),
-        phase: vec.phase,
-        active_waypoint_index: vec.activeWaypointIndex,
-        route_path: plan.routePath,
-        updated_at: new Date().toISOString(),
-      }, { onConflict: "ticket_id" });
-
-      const pct = Math.round(progress * 100);
-      [25, 50, 75].forEach((milestone) => {
-        if (pct >= milestone && !loggedMilestones.has(milestone)) {
-          loggedMilestones.add(milestone);
-          addLog(`📍 ${milestone}% — ${milestone === 75 ? "Descent approach" : milestone === 50 ? "Cruise corridor" : "Climb corridor"}`);
-        }
-      });
-
-      if (vec.phase !== lastPhase) {
-        lastPhase = vec.phase;
-        addLog(`🛰️ Phase transition — ${vec.phase}`);
-      }
-
-      if (!smsSentRef.current && isWithinSMSRange({ lat: vec.lat, lng: vec.lng }, plan.destination)) {
-        smsSentRef.current = true;
-        addLog(`📱 SMS triggered — ${Math.round(dist)}m from target`);
-        fetch("/api/send-sms", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ phone: selectedTicket.customer_phone, customerName: selectedTicket.customer_name, ticketId: selectedTicket.id, distanceMeters: dist }),
-        }).catch(console.error);
-        await supabase.from("tickets").update({ sms_sent: true }).eq("id", selectedTicket.id);
-      }
-
-      if (progress >= 1) {
-        clearInterval(intervalRef.current!);
-        clearInterval(timerRef.current!);
-        setDroneState("DELIVERED");
-        setCurrentPhase("DELIVERED");
-        setActiveWaypointIndex(plan.routePath.length - 1);
-        addLog("✅ Payload delivered.");
-        await supabase.from("tickets").update({ status: "DELIVERED" }).eq("id", selectedTicket.id);
-        if (selectedTicket.order_id) {
-          await supabase.from("orders").update({ status: "DELIVERED" }).eq("id", selectedTicket.order_id);
-        }
-      }
-    }, TELEMETRY_UPDATE_MS);
-  }, [selectedTicket, droneState, addLog, demoCruiseAltitude]);
+    launchSimulationLoop(selectedTicket, plan, 0);
+  }, [selectedTicket, droneState, addLog, demoCruiseAltitude, aiPlan, launchSimulationLoop]);
 
   useEffect(() => {
     return () => {
@@ -351,6 +408,38 @@ export default function AdminControlCenter() {
       if (timerRef.current) clearInterval(timerRef.current);
     };
   }, []);
+
+  useEffect(() => { setAiPlan(null); }, [selectedTicket?.id]);
+
+  const handleAIPlanRoute = useCallback(async () => {
+    if (!selectedTicket) return;
+    setAiPlanLoading(true);
+    setAiPlan(null);
+    try {
+      const res = await fetch("/api/missions/plan-route", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          destination: { lat: selectedTicket.latitude, lng: selectedTicket.longitude },
+          urgency_level: selectedTicket.urgency_level,
+          payload_item: selectedTicket.payload_item,
+          current_altitude: demoCruiseAltitude,
+        }),
+      });
+      const data: AIPlan & { error?: string } = await res.json();
+      if (res.ok && data.validated) {
+        setAiPlan(data);
+        setDemoCruiseAltitude(data.altitude);
+        setDronePosition((prev) => droneState === "IDLE" ? { ...prev, alt: data.altitude } : prev);
+        addLog(`🤖 AI Plan: ${data.altitude}m — ${data.reason}`);
+      } else {
+        addLog(`⚠️ AI plan rejected — ${data.error ?? "validation failed"}`);
+      }
+    } catch {
+      addLog("⚠️ AI planner failed — using manual settings");
+    }
+    setAiPlanLoading(false);
+  }, [selectedTicket, demoCruiseAltitude, droneState, addLog]);
 
   const distanceToTarget = selectedTicket
     ? formatDistance(remainingDistance({ lat: dronePosition.lat, lng: dronePosition.lng }, { lat: selectedTicket.latitude, lng: selectedTicket.longitude }))
@@ -431,7 +520,19 @@ export default function AdminControlCenter() {
             <div className="bg-white/40 backdrop-blur-xl border border-white/60 rounded-2xl px-4 py-2.5 flex items-center justify-between shadow-[0_4px_16px_-4px_rgba(0,0,0,0.04)]">
               <div className="flex items-center gap-2">
                 <div className="bg-slate-800 text-white px-3 py-1.5 rounded-full text-[10px] font-bold tracking-wider">3D REALISTIC</div>
-                <div className="bg-[#e65328] text-white px-2.5 py-1 rounded-full text-[9px] font-bold tracking-wider uppercase">Follow</div>
+                <div className="flex bg-white/50 border border-white/60 rounded-full p-0.5">
+                  {(["follow", "chase"] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      onClick={() => setCameraMode(mode)}
+                      className={`px-3 py-1 rounded-full text-[9px] font-bold tracking-wider uppercase transition-colors cursor-pointer ${
+                        cameraMode === mode ? "bg-slate-800 text-white" : "text-slate-500 hover:text-slate-700"
+                      }`}
+                    >
+                      {mode === "follow" ? "TOP" : "CHASE"}
+                    </button>
+                  ))}
+                </div>
               </div>
               <div className="flex items-center gap-3">
                 <label className="flex items-center gap-2 rounded-full border border-white/60 bg-white/50 px-3 py-1 text-[9px] font-bold uppercase tracking-wider text-slate-500">
@@ -466,6 +567,8 @@ export default function AdminControlCenter() {
                   heading={currentHeading}
                   activeWaypointIndex={activeWaypointIndex}
                   followZoom={followZoom}
+                  cameraMode={cameraMode}
+                  isAiRoute={isAiRoute}
                 />
               ) : (
                 <div className="w-full h-full flex items-center justify-center text-slate-400">
@@ -549,12 +652,46 @@ export default function AdminControlCenter() {
                     max="180"
                     step="5"
                     value={demoCruiseAltitude}
-                    onChange={(event) => setDemoCruiseAltitude(Number(event.target.value))}
+                    onChange={(event) => {
+                      const val = Number(event.target.value);
+                      setDemoCruiseAltitude(val);
+                      setAiPlan(null);
+                      if (droneState === "IDLE") setDronePosition((prev) => ({ ...prev, alt: val }));
+                    }}
                     disabled={droneState === "AIRBORNE"}
                     className="w-full accent-[#e65328] disabled:opacity-50"
                     aria-label="Demo cruise altitude"
                   />
                 </div>
+
+                {aiPlan && (
+                  <div className="bg-white/50 border border-emerald-200 rounded-xl p-3 mb-3">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <p className="text-[8px] font-bold text-slate-400 uppercase tracking-widest">AI Route Plan</p>
+                      <span className={`text-[8px] font-bold px-1.5 py-0.5 rounded-full ${aiPlan.confidence >= 80 ? "bg-emerald-100 text-emerald-600" : "bg-orange-100 text-orange-600"}`}>
+                        {aiPlan.confidence}% conf
+                      </span>
+                    </div>
+                    <div className="flex items-baseline gap-1.5 mb-1">
+                      <span className="text-sm font-mono font-bold text-slate-700">{aiPlan.altitude}m</span>
+                      <span className="text-[8px] text-emerald-600 font-bold">✓ validated</span>
+                    </div>
+                    <p className="text-[9px] text-slate-600 leading-relaxed mb-1">{aiPlan.reason}</p>
+                    {aiPlan.avoided_risks.map((risk, i) => (
+                      <p key={i} className="text-[8px] text-slate-400">⚠ {risk}</p>
+                    ))}
+                    {aiPlan.waypoints.length > 0 && (
+                      <div className="mt-1.5 pt-1.5 border-t border-slate-100 space-y-0.5">
+                        <p className="text-[8px] font-bold text-purple-400 uppercase tracking-widest">{aiPlan.waypoints.length} AI Waypoints</p>
+                        {aiPlan.waypoints.map((wp, i) => (
+                          <p key={i} className="text-[8px] text-slate-500">
+                            WP{i + 1} · {wp.alt}m{wp.reason ? ` — ${wp.reason}` : ""}
+                          </p>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 <div className="flex-1 bg-white/30 border border-white/50 rounded-xl p-2.5 mb-3 overflow-hidden flex flex-col min-h-0">
                   <p className="text-[8px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">Flight Logs</p>
@@ -566,6 +703,13 @@ export default function AdminControlCenter() {
                 </div>
 
                 <div className="space-y-2">
+                  <button
+                    onClick={handleAIPlanRoute}
+                    disabled={aiPlanLoading || droneState === "AIRBORNE" || droneState === "DELIVERED" || selectedTicket.status === "DELIVERED"}
+                    className="w-full bg-slate-800/5 hover:bg-slate-800 cursor-pointer hover:text-white text-slate-700 border border-slate-200 hover:border-slate-800 font-bold py-2.5 rounded-2xl text-[9px] tracking-wider uppercase transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {aiPlanLoading ? "Planning..." : "🤖 AI Plan Route"}
+                  </button>
                   <button onClick={handleLaunchVector} disabled={droneState === "DELIVERED" || selectedTicket.status === "DELIVERED"}
                     className="w-full bg-[#e65328] hover:bg-[#d4431b] cursor-pointer text-white font-semibold py-3 rounded-2xl text-[10px] tracking-wider uppercase shadow-[0_4px_12px_rgba(230,83,40,0.25)] transition-all disabled:opacity-50 disabled:cursor-not-allowed">
                     {droneState === "DELIVERED" || selectedTicket.status === "DELIVERED" ? "Delivered ✓" : selectedTicket.status === "IN_FLIGHT" ? "Reset & Relaunch Vector" : "Approve & Launch Vector"}

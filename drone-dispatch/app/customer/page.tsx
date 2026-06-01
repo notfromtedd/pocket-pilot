@@ -80,6 +80,7 @@ export default function CustomerView() {
   const [speed, setSpeed] = useState(0);
   const [trackingOrderId, setTrackingOrderId] = useState<string | null>(null);
   const [trackingTicketId, setTrackingTicketId] = useState<string | null>(null);
+  const [routePath, setRoutePath] = useState<{ lat: number; lng: number }[]>([]);
 
   // ── Auth check ──
   useEffect(() => {
@@ -99,49 +100,54 @@ export default function CustomerView() {
     }
   }, []);
 
-  // ── Realtime subscriptions for tracking ──
+  // ── Shared telemetry applier (component level so both effects can use it) ──
+  const applyTelemetry = useCallback((t: DroneTelemetry & { route_path?: { lat: number; lng: number }[] }) => {
+    if (t.lat && t.lng) {
+      setDronePosition({ lat: t.lat, lng: t.lng });
+      setBattery(t.battery);
+      setSpeed(t.speed);
+      setFlightStatus("airborne");
+    }
+    if (Array.isArray(t.route_path) && t.route_path.length > 1) {
+      setRoutePath(t.route_path);
+    }
+  }, []);
+
+  // ── Tracking: order-level subscriptions (status + order_id fallback telemetry) ──
   useEffect(() => {
     if (!trackingMode || !trackingOrderId) return;
 
-    const applyTelemetry = (t: DroneTelemetry) => {
-      if (t.lat && t.lng) {
-        setDronePosition({ lat: t.lat, lng: t.lng });
-        setBattery(t.battery);
-        setSpeed(t.speed);
-        setFlightStatus("airborne");
-      }
-    };
-
     const fetchLatestTelemetry = async () => {
-      const { data } = await supabase
-        .from("drone_telemetry")
-        .select("lat,lng,battery,speed,ticket_id")
-        .eq("order_id", trackingOrderId)
-        .maybeSingle();
+      // 1. Try to get ticket_id from the tickets table (needed for reliable telemetry query)
+      let ticketId = trackingTicketId;
+      if (!ticketId) {
+        const { data: td } = await supabase
+          .from("tickets")
+          .select("id")
+          .eq("order_id", trackingOrderId)
+          .maybeSingle();
+        if (td?.id) { ticketId = td.id; setTrackingTicketId(td.id); }
+      }
+
+      // 2. Fetch telemetry: ticket_id is the reliable key (admin upserts by it);
+      //    fall back to order_id for older rows
+      const sel = "lat,lng,battery,speed,ticket_id,route_path";
+      const { data } = await (
+        ticketId
+          ? supabase.from("drone_telemetry").select(sel).eq("ticket_id", ticketId).maybeSingle()
+          : supabase.from("drone_telemetry").select(sel).eq("order_id", trackingOrderId).maybeSingle()
+      );
 
       if (data) {
-        applyTelemetry(data as DroneTelemetry);
-        const ticketId = (data as { ticket_id?: string }).ticket_id;
-        if (ticketId) setTrackingTicketId(ticketId);
+        applyTelemetry(data as DroneTelemetry & { route_path?: { lat: number; lng: number }[] });
+        const tid = (data as { ticket_id?: string }).ticket_id;
+        if (tid) setTrackingTicketId(tid);
       }
     };
 
     fetchLatestTelemetry();
 
-    const telCh = supabase
-      .channel(`cust-tel-${trackingOrderId}`)
-      .on("postgres_changes", {
-        event: "*",
-        schema: "public",
-        table: "drone_telemetry",
-        filter: `order_id=eq.${trackingOrderId}`,
-      }, (p) => {
-        const t = p.new as DroneTelemetry & { ticket_id?: string };
-        applyTelemetry(t);
-        if (t.ticket_id) setTrackingTicketId(t.ticket_id);
-      })
-      .subscribe();
-
+    // Ticket status changes (DELIVERED, etc.)
     const tickCh = supabase
       .channel(`cust-tick-${trackingOrderId}`)
       .on("postgres_changes", {
@@ -156,8 +162,42 @@ export default function CustomerView() {
       })
       .subscribe();
 
-    return () => { supabase.removeChannel(telCh); supabase.removeChannel(tickCh); };
-  }, [trackingMode, trackingOrderId]);
+    // Telemetry by order_id as fallback (fires when admin has order_id set on the row)
+    const telCh = supabase
+      .channel(`cust-tel-oid-${trackingOrderId}`)
+      .on("postgres_changes", {
+        event: "*",
+        schema: "public",
+        table: "drone_telemetry",
+        filter: `order_id=eq.${trackingOrderId}`,
+      }, (p) => {
+        const t = p.new as DroneTelemetry & { ticket_id?: string; route_path?: { lat: number; lng: number }[] };
+        applyTelemetry(t);
+        if (t.ticket_id) setTrackingTicketId(t.ticket_id);
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(tickCh); supabase.removeChannel(telCh); };
+  }, [trackingMode, trackingOrderId, applyTelemetry]);
+
+  // ── Tracking: ticket_id telemetry subscription (reliable — matches admin upsert key) ──
+  useEffect(() => {
+    if (!trackingMode || !trackingTicketId) return;
+
+    const telCh = supabase
+      .channel(`cust-tel-tid-${trackingTicketId}`)
+      .on("postgres_changes", {
+        event: "*",
+        schema: "public",
+        table: "drone_telemetry",
+        filter: `ticket_id=eq.${trackingTicketId}`,
+      }, (p) => {
+        applyTelemetry(p.new as DroneTelemetry & { route_path?: { lat: number; lng: number }[] });
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(telCh); };
+  }, [trackingMode, trackingTicketId, applyTelemetry]);
 
   // ── Cart operations ──
   const addToCart = useCallback((product: Product) => {
@@ -268,8 +308,8 @@ export default function CustomerView() {
     return (
       <div className="relative h-screen w-full bg-[#f0f2f5] flex flex-col font-sans antialiased overflow-hidden">
         <div className="flex-[0_0_60%] relative">
-          <GlovoMapWrapper dronePosition={dronePosition} targetPosition={targetPos} customerPosition={targetPos} />
-          <button onClick={() => { setTrackingMode(false); setFlightStatus("idle"); setDronePosition(null); setTrackingTicketId(null); }}
+          <GlovoMapWrapper dronePosition={dronePosition} targetPosition={targetPos} customerPosition={targetPos} routePath={routePath} />
+          <button onClick={() => { setTrackingMode(false); setFlightStatus("idle"); setDronePosition(null); setTrackingTicketId(null); setRoutePath([]); }}
             className="absolute top-4 left-4 z-20 bg-white/80 backdrop-blur-md border border-white/60 rounded-full w-10 h-10 flex items-center justify-center shadow-md cursor-pointer hover:bg-white">
             <span className="text-sm">←</span>
           </button>

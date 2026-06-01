@@ -8,6 +8,8 @@ interface GlovoMapInnerProps {
   dronePosition: { lat: number; lng: number } | null;
   targetPosition: { lat: number; lng: number };
   customerPosition: { lat: number; lng: number };
+  routePath?: { lat: number; lng: number }[];
+  isAiRoute?: boolean;
 }
 
 /* ── Custom marker HTML factories ── */
@@ -78,6 +80,8 @@ export default function GlovoMapInner({
   dronePosition,
   targetPosition,
   customerPosition,
+  routePath = [],
+  isAiRoute = false,
 }: GlovoMapInnerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
@@ -86,6 +90,7 @@ export default function GlovoMapInner({
   const customerMarkerRef = useRef<L.Marker | null>(null);
   const routeLineRef = useRef<L.Polyline | null>(null);
   const radiusCircleRef = useRef<L.Circle | null>(null);
+  const fullRouteLineRef = useRef<L.Polyline | null>(null);
 
   /* ── Initialise map once ── */
   useEffect(() => {
@@ -142,6 +147,7 @@ export default function GlovoMapInner({
       customerMarkerRef.current = null;
       routeLineRef.current = null;
       radiusCircleRef.current = null;
+      fullRouteLineRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -169,21 +175,25 @@ export default function GlovoMapInner({
         }).addTo(map);
       }
 
-      /* Route line: drone → target */
-      const routeCoords: L.LatLngExpression[] = [
-        latLng,
-        [targetPosition.lat, targetPosition.lng],
-      ];
-
-      if (routeLineRef.current) {
-        routeLineRef.current.setLatLngs(routeCoords);
-      } else {
-        routeLineRef.current = L.polyline(routeCoords, {
-          color: "#e65328",
-          weight: 3,
-          opacity: 0.7,
-          dashArray: "8, 8",
-        }).addTo(map);
+      /* Fallback dashed line drone → target (only when no full route available) */
+      if (routePath.length < 2) {
+        const fallbackCoords: L.LatLngExpression[] = [
+          latLng,
+          [targetPosition.lat, targetPosition.lng],
+        ];
+        if (routeLineRef.current) {
+          routeLineRef.current.setLatLngs(fallbackCoords);
+        } else {
+          routeLineRef.current = L.polyline(fallbackCoords, {
+            color: "#e65328",
+            weight: 3,
+            opacity: 0.7,
+            dashArray: "8, 8",
+          }).addTo(map);
+        }
+      } else if (routeLineRef.current) {
+        routeLineRef.current.remove();
+        routeLineRef.current = null;
       }
 
       /* Delivery radius circle around drone */
@@ -224,7 +234,29 @@ export default function GlovoMapInner({
       const bounds = L.latLngBounds(points);
       map.fitBounds(bounds, { padding: [50, 50], maxZoom: 16 });
     }
-  }, [dronePosition, targetPosition, customerPosition]);
+  }, [dronePosition, targetPosition, customerPosition, routePath]);
+
+  /* ── Draw / update the full planned route polyline ── */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    if (routePath.length > 1) {
+      const coords: L.LatLngExpression[] = routePath.map((p) => [p.lat, p.lng]);
+      if (fullRouteLineRef.current) {
+        fullRouteLineRef.current.setLatLngs(coords);
+      } else {
+        fullRouteLineRef.current = L.polyline(coords, {
+          color: isAiRoute ? "#a855f7" : "#00c7e6",
+          weight: 3,
+          opacity: 0.7,
+        }).addTo(map);
+      }
+    } else if (fullRouteLineRef.current) {
+      fullRouteLineRef.current.remove();
+      fullRouteLineRef.current = null;
+    }
+  }, [routePath, isAiRoute]);
 
   return (
     <div

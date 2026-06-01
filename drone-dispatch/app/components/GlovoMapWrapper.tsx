@@ -17,6 +17,8 @@ interface GlovoMapProps {
   dronePosition: { lat: number; lng: number } | null;
   targetPosition: { lat: number; lng: number };
   customerPosition: { lat: number; lng: number };
+  routePath?: { lat: number; lng: number }[];
+  isAiRoute?: boolean;
 }
 
 export default function GlovoMapWrapper(props: GlovoMapProps) {

@@ -159,6 +159,22 @@ function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * Math.max(0, Math.min(1, t));
 }
 
+/** Build a route from explicit intermediate waypoints (AI-supplied). No bezier — literal path. */
+export function createRoutePathFromWaypoints(
+  origin: GeoPoint,
+  intermediates: { lat: number; lng: number; alt: number }[],
+  destination: GeoPoint,
+): RoutePoint[] {
+  const path: RoutePoint[] = [{ ...origin, alt: 8, kind: "base" }];
+  intermediates.forEach((wp, i) => {
+    const kind: RoutePointKind =
+      i === 0 ? "climb" : i === intermediates.length - 1 ? "approach" : "cruise";
+    path.push({ lat: wp.lat, lng: wp.lng, alt: Math.max(60, Math.min(180, wp.alt)), kind });
+  });
+  path.push({ ...destination, alt: 8, kind: "target" });
+  return path;
+}
+
 export function createRoutePath(origin: GeoPoint, destination: GeoPoint, cruiseAltitude = DEFAULT_CRUISE_ALT): RoutePoint[] {
   const dx = destination.lng - origin.lng;
   const dy = destination.lat - origin.lat;

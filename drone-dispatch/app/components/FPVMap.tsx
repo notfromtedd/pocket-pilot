@@ -14,6 +14,8 @@ interface FPVMapProps {
   heading?: number;
   activeWaypointIndex?: number;
   followZoom?: number;
+  cameraMode?: "follow" | "chase";
+  isAiRoute?: boolean;
 }
 
 type Coord = [number, number];
@@ -61,6 +63,8 @@ export default function FPVMap({
   heading = 0,
   activeWaypointIndex = 0,
   followZoom = DEFAULT_FOLLOW_ZOOM,
+  cameraMode = "follow",
+  isAiRoute = false,
 }: FPVMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapboxMap | null>(null);
@@ -141,7 +145,7 @@ export default function FPVMap({
       }
     });
     resizeObserver.observe(containerRef.current);
-    requestAnimationFrame(() => {
+    const initialRafId = requestAnimationFrame(() => {
       map.resize();
       map.triggerRepaint();
     });
@@ -218,6 +222,7 @@ export default function FPVMap({
 
     return () => {
       window.clearTimeout(loadTimeout);
+      cancelAnimationFrame(initialRafId);
       map.off("load", syncLayers);
       map.off("style.load", syncLayers);
       map.off("idle", onRenderReady);
@@ -247,6 +252,17 @@ export default function FPVMap({
   }, [headingData, routeData, traveledData, waypointData]);
 
   useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
+    if (map.getLayer("route-corridor")) {
+      map.setPaintProperty("route-corridor", "line-color", isAiRoute ? "#a855f7" : "#00c7e6");
+    }
+    if (map.getLayer("route-traveled")) {
+      map.setPaintProperty("route-traveled", "line-color", isAiRoute ? "#7c3aed" : "#e65328");
+    }
+  }, [isAiRoute, mapReady]);
+
+  useEffect(() => {
     droneMarkerRef.current?.setLngLat([dronePosition.lng, dronePosition.lat]);
     targetMarkerRef.current?.setLngLat([targetPosition.lng, targetPosition.lat]);
 
@@ -262,16 +278,19 @@ export default function FPVMap({
     const map = mapRef.current;
     if (!map) return;
 
-    const target = followCameraTarget(dronePosition, followZoom);
+    const target = cameraMode === "chase"
+      ? chaseCameraTarget(dronePosition, heading, followZoom)
+      : followCameraTarget(dronePosition, followZoom);
+
     map.easeTo({
       center: target.center,
       zoom: target.zoom,
       pitch: target.pitch,
       bearing: target.bearing,
-      duration: 650,
+      duration: 200,
       essential: true,
     });
-  }, [dronePosition, followZoom]);
+  }, [dronePosition, heading, followZoom, cameraMode]);
 
   return (
     <div className="relative w-full h-full bg-[#edf1f3]" style={{ minHeight: "200px" }}>
@@ -551,6 +570,18 @@ function followCameraTarget(dronePosition: { lat: number; lng: number; alt: numb
     zoom: clampNumber(followZoom, MIN_ZOOM, MAX_ZOOM),
     pitch: 56,
     bearing: 0,
+  };
+}
+
+function chaseCameraTarget(dronePosition: { lat: number; lng: number; alt: number }, headingDeg: number, followZoom: number) {
+  // Offset the map center 100m behind the drone so the drone sits in the upper portion of the frame
+  const behind = offsetPoint(dronePosition, (headingDeg + 180) % 360, 100);
+  const center = clampCoord([behind.lng, behind.lat]);
+  return {
+    center: center as LngLatLike,
+    zoom: clampNumber(followZoom, MIN_ZOOM, MAX_ZOOM),
+    pitch: 65,
+    bearing: headingDeg,
   };
 }
 
