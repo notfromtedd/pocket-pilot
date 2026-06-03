@@ -36,6 +36,7 @@ interface DroneTelemetry {
   lng: number;
   battery: number;
   speed: number;
+  phase?: string;
 }
 
 const STATUS_STEPS = [
@@ -102,6 +103,11 @@ export default function CustomerView() {
 
   // ── Shared telemetry applier (component level so both effects can use it) ──
   const applyTelemetry = useCallback((t: DroneTelemetry & { route_path?: { lat: number; lng: number }[] }) => {
+    if (t.phase === "RETURNING" || t.phase === "DELIVERED") {
+      setFlightStatus("delivered");
+      return;
+    }
+
     if (t.lat && t.lng) {
       setDronePosition({ lat: t.lat, lng: t.lng });
       setBattery(t.battery);
@@ -131,7 +137,7 @@ export default function CustomerView() {
 
       // 2. Fetch telemetry: ticket_id is the reliable key (admin upserts by it);
       //    fall back to order_id for older rows
-      const sel = "lat,lng,battery,speed,ticket_id,route_path";
+      const sel = "lat,lng,battery,speed,phase,ticket_id,route_path";
       const { data } = await (
         ticketId
           ? supabase.from("drone_telemetry").select(sel).eq("ticket_id", ticketId).maybeSingle()
@@ -178,7 +184,7 @@ export default function CustomerView() {
       .subscribe();
 
     return () => { supabase.removeChannel(tickCh); supabase.removeChannel(telCh); };
-  }, [trackingMode, trackingOrderId, applyTelemetry]);
+  }, [trackingMode, trackingOrderId, trackingTicketId, applyTelemetry]);
 
   // ── Tracking: ticket_id telemetry subscription (reliable — matches admin upsert key) ──
   useEffect(() => {

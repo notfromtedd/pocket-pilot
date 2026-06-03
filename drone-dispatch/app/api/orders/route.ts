@@ -72,7 +72,10 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const customerId = searchParams.get('customer_id');
 
-  let query = supabase.from('orders').select('*, order_items(*)').order('created_at', { ascending: false });
+  let query = supabase
+    .from('orders')
+    .select('*, customers(full_name, email, phone), order_items(*), tickets(id, customer_name, customer_phone, payload_item, urgency_level, latitude, longitude, status, drone_id)')
+    .order('created_at', { ascending: false });
   if (customerId) query = query.eq('customer_id', customerId);
 
   const { data, error } = await query;

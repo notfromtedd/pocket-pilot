@@ -8,7 +8,9 @@ import {
   isWithinSMSRange, formatDistance, formatTime,
   type FlightPhase, type FlightPlan, type RoutePoint,
 } from "../lib/simulator";
+import { DEFAULT_DRONE_ID, DRONE_FLEET, type DroneFleetUnit } from "../lib/fleet";
 import ProductManager from "../components/ProductManager";
+import PurchaseLogPanel from "../components/PurchaseLogPanel";
 import RevenuePanel from "../components/RevenuePanel";
 
 const FPVMap = dynamic(() => import("../components/FPVMap"), { ssr: false });
@@ -25,16 +27,42 @@ interface Ticket {
   longitude: number;
   status: string;
   sms_sent?: boolean;
+  drone_id?: string;
   order_id?: string;
 }
 
-type DroneState = "IDLE" | "AIRBORNE" | "DELIVERED" | "OVERRIDE";
-type AdminTab = "dispatch" | "products" | "revenue";
+type DroneState = "IDLE" | "AIRBORNE" | "DELIVERED" | "RETURNING" | "OVERRIDE";
+type AdminTab = "dispatch" | "products" | "orders" | "revenue";
 type UrgencyLevel = "STANDARD" | "HIGH" | "CRITICAL";
 type AIWaypoint = { lat: number; lng: number; alt: number; reason?: string };
 type AIPlan = { altitude: number; reason: string; avoided_risks: string[]; confidence: number; validated: boolean; waypoints: AIWaypoint[] };
+type FleetDisplayState = "IDLE" | "ASSIGNED" | "AIRBORNE" | "DELIVERED" | "RETURNING" | "OVERRIDE";
+type CameraMode = "free" | "follow" | "chase";
+
+interface DroneTelemetryRow {
+  ticket_id?: string;
+  order_id?: string;
+  drone_id?: string;
+  lat: number;
+  lng: number;
+  alt?: number;
+  battery?: number;
+  speed?: number;
+  heading?: number;
+  phase?: FlightPhase;
+  active_waypoint_index?: number;
+  route_path?: RoutePoint[];
+  updated_at?: string;
+}
+
+interface MissionSimulation {
+  interval: ReturnType<typeof setInterval>;
+  timer: ReturnType<typeof setInterval>;
+  droneId: string;
+}
 
 const TELEMETRY_UPDATE_MS = 250;
+const TELEMETRY_DB_UPDATE_MS = 1000;
 const SIMULATION_TIME_SCALE = 2;
 const DEFAULT_FOLLOW_ZOOM = 17.0;
 const DEFAULT_DEMO_CRUISE_ALTITUDE = 140;
@@ -60,10 +88,37 @@ function estimateProgressFromTelemetry(
   return Math.min(0.98, (segIndex + localT) / segCount);
 }
 
+function getDroneBasePosition(droneId: string) {
+  const drone = DRONE_FLEET.find((unit) => unit.id === droneId) ?? DRONE_FLEET[0];
+  return { lat: drone.baseLat, lng: drone.baseLng, alt: 0 };
+}
+
+function getFleetState(
+  ticket: Ticket | undefined,
+  activeDroneId: string,
+  droneId: string,
+  activeState: DroneState,
+  telemetry?: DroneTelemetryRow,
+): FleetDisplayState {
+  if (activeDroneId === droneId && activeState === "OVERRIDE") return "OVERRIDE";
+  if (telemetry?.phase === "RETURNING") return "RETURNING";
+  if (!ticket) return "IDLE";
+  if (ticket.status === "DELIVERED") return "DELIVERED";
+  if (ticket.status === "IN_FLIGHT") return "AIRBORNE";
+  return "ASSIGNED";
+}
+
+function sortTicketsByUrgency(items: Ticket[]) {
+  const urgencyOrder: Record<string, number> = { CRITICAL: 0, HIGH: 1, STANDARD: 2 };
+  return [...items].sort((a, b) => (urgencyOrder[a.urgency_level] ?? 2) - (urgencyOrder[b.urgency_level] ?? 2));
+}
+
 export default function AdminControlCenter() {
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
   const [adminTab, setAdminTab] = useState<AdminTab>("dispatch");
+  const [selectedDroneId, setSelectedDroneId] = useState(DEFAULT_DRONE_ID);
+  const [fleetTelemetry, setFleetTelemetry] = useState<Record<string, DroneTelemetryRow>>({});
 
   const [droneState, setDroneState] = useState<DroneState>("IDLE");
   const [dronePosition, setDronePosition] = useState({ lat: -1.2921, lng: 36.8219, alt: 0 });
@@ -78,14 +133,16 @@ export default function AdminControlCenter() {
   const [routePath, setRoutePath] = useState<RoutePoint[]>([]);
   const [followZoom, setFollowZoom] = useState(DEFAULT_FOLLOW_ZOOM);
   const [demoCruiseAltitude, setDemoCruiseAltitude] = useState(DEFAULT_DEMO_CRUISE_ALTITUDE);
-  const [cameraMode, setCameraMode] = useState<"follow" | "chase">("follow");
+  const [cameraMode, setCameraMode] = useState<CameraMode>("free");
+  const [mapFocusKey, setMapFocusKey] = useState(0);
   const [aiPlan, setAiPlan] = useState<AIPlan | null>(null);
   const [aiPlanLoading, setAiPlanLoading] = useState(false);
   const [isAiRoute, setIsAiRoute] = useState(false);
 
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const smsSentRef = useRef(false);
+  const simulationsRef = useRef<Record<string, MissionSimulation>>({});
+  const selectedTicketRef = useRef<Ticket | null>(null);
+  const selectedDroneIdRef = useRef(selectedDroneId);
+  const smsSentRef = useRef<Record<string, boolean>>({});
   const logsEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { logsEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [flightLogs]);
@@ -93,6 +150,17 @@ export default function AdminControlCenter() {
   const addLog = useCallback((msg: string) => {
     const ts = new Date().toLocaleTimeString("en-US", { hour12: false });
     setFlightLogs((prev) => [...prev, `[${ts}] ${msg}`]);
+  }, []);
+
+  useEffect(() => { selectedTicketRef.current = selectedTicket; }, [selectedTicket]);
+  useEffect(() => { selectedDroneIdRef.current = selectedDroneId; }, [selectedDroneId]);
+
+  const clearSimulation = useCallback((ticketId: string) => {
+    const simulation = simulationsRef.current[ticketId];
+    if (!simulation) return;
+    clearInterval(simulation.interval);
+    clearInterval(simulation.timer);
+    delete simulationsRef.current[ticketId];
   }, []);
 
   // ── Supabase realtime ──
@@ -103,15 +171,9 @@ export default function AdminControlCenter() {
         .select("*")
         .in("status", ["PENDING", "IN_FLIGHT"])
         .order("created_at", { ascending: false });
-      if (data && data.length > 0) {
-        // Sort: emergencies first, then by urgency
-        const sorted = data.sort((a, b) => {
-          const urgencyOrder: Record<string, number> = { CRITICAL: 0, HIGH: 1, STANDARD: 2 };
-          return (urgencyOrder[a.urgency_level] ?? 2) - (urgencyOrder[b.urgency_level] ?? 2);
-        });
-        setTickets(sorted);
-        setSelectedTicket((curr) => curr ?? sorted[0]);
-      }
+      const sorted = sortTicketsByUrgency((data ?? []) as Ticket[]);
+      setTickets(sorted);
+      setSelectedTicket((curr) => curr ?? sorted[0] ?? null);
     };
     fetchQueue();
 
@@ -120,11 +182,8 @@ export default function AdminControlCenter() {
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "tickets" }, (payload) => {
         const t = payload.new as Ticket;
         setTickets((prev) => {
-          const updated = [t, ...prev];
-          return updated.sort((a, b) => {
-            const o: Record<string, number> = { CRITICAL: 0, HIGH: 1, STANDARD: 2 };
-            return (o[a.urgency_level] ?? 2) - (o[b.urgency_level] ?? 2);
-          });
+          const without = prev.filter((ticket) => ticket.id !== t.id);
+          return sortTicketsByUrgency([t, ...without]);
         });
         setSelectedTicket((curr) => curr ?? t);
         addLog(`📥 New dispatch: ${t.payload_item} → ${t.customer_name}`);
@@ -136,7 +195,56 @@ export default function AdminControlCenter() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    if (!selectedTicket?.drone_id) return;
+    const syncDrone = window.setTimeout(() => {
+      setSelectedDroneId(selectedTicket.drone_id as string);
+    }, 0);
+    return () => { window.clearTimeout(syncDrone); };
+  }, [selectedTicket?.drone_id]);
+
+  useEffect(() => {
+    const fetchFleetTelemetry = async () => {
+      const { data } = await supabase
+        .from("drone_telemetry")
+        .select("*")
+        .order("updated_at", { ascending: false })
+        .limit(100);
+
+      if (!data) return;
+
+      const grouped: Record<string, DroneTelemetryRow> = {};
+      (data as DroneTelemetryRow[]).forEach((row) => {
+        if (row.drone_id && !grouped[row.drone_id]) grouped[row.drone_id] = row;
+      });
+      setFleetTelemetry(grouped);
+    };
+
+    fetchFleetTelemetry();
+
+    const channel = supabase
+      .channel("admin-fleet-telemetry")
+      .on("postgres_changes", { event: "*", schema: "public", table: "drone_telemetry" }, (payload) => {
+        const row = payload.new as DroneTelemetryRow;
+        if (!row?.drone_id) return;
+        setFleetTelemetry((prev) => ({ ...prev, [row.drone_id as string]: row }));
+      })
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "tickets" }, (payload) => {
+        const updatedTicket = payload.new as Ticket;
+        setTickets((prev) => {
+          const without = prev.filter((ticket) => ticket.id !== updatedTicket.id);
+          if (updatedTicket.status === "DELIVERED") return without;
+          return sortTicketsByUrgency([updatedTicket, ...without]);
+        });
+        setSelectedTicket((curr) => curr?.id === updatedTicket.id ? updatedTicket : curr);
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, []);
+
   const applyTelemetry = useCallback((t: {
+    drone_id?: string;
     lat: number;
     lng: number;
     alt?: number;
@@ -148,60 +256,178 @@ export default function AdminControlCenter() {
     route_path?: RoutePoint[];
   }) => {
     if (!t.lat || !t.lng) return;
+    if (t.drone_id) setSelectedDroneId(t.drone_id);
     setDronePosition({ lat: t.lat, lng: t.lng, alt: t.alt ?? 0 });
     setBattery(t.battery ?? 100);
     setCurrentSpeed(t.speed ?? 0);
     setCurrentHeading(t.heading ?? 0);
     setActiveWaypointIndex(t.active_waypoint_index ?? 0);
     if (Array.isArray(t.route_path) && t.route_path.length > 0) setRoutePath(t.route_path);
-    if (t.phase) setCurrentPhase(t.phase);
+    if (t.phase) {
+      setCurrentPhase(t.phase);
+      if (t.phase === "RETURNING") setDroneState("RETURNING");
+      else if (t.phase === "DELIVERED") setDroneState("DELIVERED");
+      else setDroneState("AIRBORNE");
+    }
   }, []);
 
   const launchSimulationLoop = useCallback((ticket: Ticket, plan: FlightPlan, initialProgress: number) => {
-    if (intervalRef.current) clearInterval(intervalRef.current);
-    if (timerRef.current) clearInterval(timerRef.current);
-    intervalRef.current = null;
-    timerRef.current = null;
+    clearSimulation(ticket.id);
 
-    setRoutePath(plan.routePath);
-    const estimatedFlightSeconds = Math.max(
-      35,
-      haversineDistance(plan.origin, plan.destination) / (plan.maxSpeed * 1000 / 3600)
+    const activeDroneId = ticket.drone_id || selectedDroneId || DEFAULT_DRONE_ID;
+    const base = getDroneBasePosition(activeDroneId);
+    const isViewingMission = () => selectedTicketRef.current?.id === ticket.id || (
+      selectedDroneIdRef.current === activeDroneId && !selectedTicketRef.current
     );
-    let progress = initialProgress;
-    const loggedMilestones = new Set<number>();
-    [25, 50, 75].forEach((m) => { if (Math.round(progress * 100) >= m) loggedMilestones.add(m); });
-    let lastPhase: FlightPhase | null = null;
-
-    timerRef.current = setInterval(() => setElapsedTime((t) => t + 1), 1000);
-
-    intervalRef.current = setInterval(async () => {
-      progress += ((TELEMETRY_UPDATE_MS / 1000) * SIMULATION_TIME_SCALE) / estimatedFlightSeconds;
-      if (progress > 1) progress = 1;
-
-      const vec = interpolatePosition(plan, progress);
-      const dist = remainingDistance({ lat: vec.lat, lng: vec.lng }, plan.destination);
-
-      setDronePosition({ lat: vec.lat, lng: vec.lng, alt: vec.alt });
-      setFlightProgress(Math.round(progress * 100));
-      setBattery(Math.round(vec.battery));
-      setCurrentSpeed(Math.round(vec.speed));
-      setCurrentHeading(Math.round(vec.heading));
-      setCurrentPhase(vec.phase);
-      setActiveWaypointIndex(vec.activeWaypointIndex);
-
-      await supabase.from("drone_telemetry").upsert({
+    const mirrorTelemetry = (
+      telemetry: DroneTelemetryRow,
+      state: DroneState,
+      progressPct: number,
+      path: RoutePoint[],
+    ) => {
+      setFleetTelemetry((prev) => ({ ...prev, [activeDroneId]: telemetry }));
+      if (!isViewingMission()) return;
+      setDronePosition({ lat: telemetry.lat, lng: telemetry.lng, alt: telemetry.alt ?? 0 });
+      setFlightProgress(progressPct);
+      setBattery(telemetry.battery ?? 100);
+      setCurrentSpeed(telemetry.speed ?? 0);
+      setCurrentHeading(telemetry.heading ?? 0);
+      setCurrentPhase(telemetry.phase ?? "LAUNCH");
+      setActiveWaypointIndex(telemetry.active_waypoint_index ?? 0);
+      setRoutePath(path);
+      setDroneState(state);
+    };
+    const writeTelemetry = (telemetry: DroneTelemetryRow) => {
+      supabase.from("drone_telemetry").upsert({
         ticket_id: ticket.id,
         order_id: ticket.order_id,
-        lat: vec.lat, lng: vec.lng, alt: vec.alt,
-        battery: Math.round(vec.battery), speed: Math.round(vec.speed), heading: Math.round(vec.heading),
+        drone_id: activeDroneId,
+        lat: telemetry.lat,
+        lng: telemetry.lng,
+        alt: telemetry.alt,
+        battery: telemetry.battery,
+        speed: telemetry.speed,
+        heading: telemetry.heading,
+        phase: telemetry.phase,
+        active_waypoint_index: telemetry.active_waypoint_index,
+        route_path: telemetry.route_path,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "ticket_id" }).then(({ error }) => {
+        if (error) console.error("Telemetry update failed:", error);
+      });
+    };
+
+    setSelectedDroneId(activeDroneId);
+    setRoutePath(plan.routePath);
+
+    let outboundProgress = initialProgress;
+    let returnProgress = 0;
+    let lastTelemetryWrite = 0;
+    let lastPhase: FlightPhase | null = null;
+    const loggedMilestones = new Set<number>();
+    [25, 50, 75].forEach((m) => { if (Math.round(outboundProgress * 100) >= m) loggedMilestones.add(m); });
+
+    const timer = setInterval(() => {
+      if (isViewingMission()) setElapsedTime((t) => t + 1);
+    }, 1000);
+
+    const startReturnToBase = () => {
+      addLog(`↩ ${activeDroneId} returning to base.`);
+      const returnPlan = createFlightPlan(
+        { lat: base.lat, lng: base.lng },
+        {
+          origin: plan.destination,
+          urgencyLevel: "STANDARD",
+          cruiseAltitude: Math.min(90, plan.cruiseAltitude),
+          maxSpeed: Math.max(42, Math.round(plan.maxSpeed * 0.72)),
+        },
+      );
+      const returnSeconds = Math.max(
+        28,
+        haversineDistance(returnPlan.origin, returnPlan.destination) / (returnPlan.maxSpeed * 1000 / 3600),
+      );
+
+      const returnInterval = setInterval(() => {
+        returnProgress += ((TELEMETRY_UPDATE_MS / 1000) * SIMULATION_TIME_SCALE) / returnSeconds;
+        if (returnProgress > 1) returnProgress = 1;
+
+        const vec = interpolatePosition(returnPlan, returnProgress);
+        const telemetry: DroneTelemetryRow = {
+          ticket_id: ticket.id,
+          order_id: ticket.order_id,
+          drone_id: activeDroneId,
+          lat: vec.lat,
+          lng: vec.lng,
+          alt: vec.alt,
+          battery: Math.round(Math.max(vec.battery, 35)),
+          speed: Math.round(vec.speed),
+          heading: Math.round(vec.heading),
+          phase: returnProgress >= 1 ? "DELIVERED" : "RETURNING",
+          active_waypoint_index: vec.activeWaypointIndex,
+          route_path: returnPlan.routePath,
+          updated_at: new Date().toISOString(),
+        };
+
+        mirrorTelemetry(telemetry, returnProgress >= 1 ? "IDLE" : "RETURNING", Math.max(0, 100 - Math.round(returnProgress * 100)), returnPlan.routePath);
+
+        const now = Date.now();
+        if (now - lastTelemetryWrite >= TELEMETRY_DB_UPDATE_MS || returnProgress >= 1) {
+          lastTelemetryWrite = now;
+          writeTelemetry(returnProgress >= 1 ? { ...telemetry, lat: base.lat, lng: base.lng, alt: 0, speed: 0 } : telemetry);
+        }
+
+        if (returnProgress >= 1) {
+          clearSimulation(ticket.id);
+          addLog(`⌂ ${activeDroneId} docked at base.`);
+          if (isViewingMission()) {
+            setDronePosition(base);
+            setCurrentSpeed(0);
+            setCurrentPhase("DELIVERED");
+            setDroneState("IDLE");
+            setFlightProgress(0);
+          }
+        }
+      }, TELEMETRY_UPDATE_MS);
+
+      simulationsRef.current[ticket.id] = { interval: returnInterval, timer, droneId: activeDroneId };
+    };
+
+    const estimatedFlightSeconds = Math.max(
+      35,
+      haversineDistance(plan.origin, plan.destination) / (plan.maxSpeed * 1000 / 3600),
+    );
+
+    const outboundInterval = setInterval(async () => {
+      outboundProgress += ((TELEMETRY_UPDATE_MS / 1000) * SIMULATION_TIME_SCALE) / estimatedFlightSeconds;
+      if (outboundProgress > 1) outboundProgress = 1;
+
+      const vec = interpolatePosition(plan, outboundProgress);
+      const dist = remainingDistance({ lat: vec.lat, lng: vec.lng }, plan.destination);
+      const telemetry: DroneTelemetryRow = {
+        ticket_id: ticket.id,
+        order_id: ticket.order_id,
+        drone_id: activeDroneId,
+        lat: vec.lat,
+        lng: vec.lng,
+        alt: vec.alt,
+        battery: Math.round(vec.battery),
+        speed: Math.round(vec.speed),
+        heading: Math.round(vec.heading),
         phase: vec.phase,
         active_waypoint_index: vec.activeWaypointIndex,
         route_path: plan.routePath,
         updated_at: new Date().toISOString(),
-      }, { onConflict: "ticket_id" });
+      };
+      const pct = Math.round(outboundProgress * 100);
 
-      const pct = Math.round(progress * 100);
+      mirrorTelemetry(telemetry, outboundProgress >= 1 ? "DELIVERED" : "AIRBORNE", pct, plan.routePath);
+
+      const now = Date.now();
+      if (now - lastTelemetryWrite >= TELEMETRY_DB_UPDATE_MS || outboundProgress >= 1) {
+        lastTelemetryWrite = now;
+        writeTelemetry(telemetry);
+      }
+
       [25, 50, 75].forEach((milestone) => {
         if (pct >= milestone && !loggedMilestones.has(milestone)) {
           loggedMilestones.add(milestone);
@@ -211,11 +437,11 @@ export default function AdminControlCenter() {
 
       if (vec.phase !== lastPhase) {
         lastPhase = vec.phase;
-        addLog(`🛰️ Phase transition — ${vec.phase}`);
+        addLog(`🛰️ ${activeDroneId} phase — ${vec.phase}`);
       }
 
-      if (!smsSentRef.current && isWithinSMSRange({ lat: vec.lat, lng: vec.lng }, plan.destination)) {
-        smsSentRef.current = true;
+      if (!smsSentRef.current[ticket.id] && isWithinSMSRange({ lat: vec.lat, lng: vec.lng }, plan.destination)) {
+        smsSentRef.current[ticket.id] = true;
         addLog(`📱 SMS triggered — ${Math.round(dist)}m from target`);
         fetch("/api/send-sms", {
           method: "POST", headers: { "Content-Type": "application/json" },
@@ -224,20 +450,20 @@ export default function AdminControlCenter() {
         await supabase.from("tickets").update({ sms_sent: true }).eq("id", ticket.id);
       }
 
-      if (progress >= 1) {
-        clearInterval(intervalRef.current!);
-        clearInterval(timerRef.current!);
-        setDroneState("DELIVERED");
-        setCurrentPhase("DELIVERED");
-        setActiveWaypointIndex(plan.routePath.length - 1);
+      if (outboundProgress >= 1) {
+        clearInterval(outboundInterval);
         addLog("✅ Payload delivered.");
         await supabase.from("tickets").update({ status: "DELIVERED" }).eq("id", ticket.id);
+        setSelectedTicket((curr) => curr?.id === ticket.id ? { ...curr, status: "DELIVERED" } : curr);
         if (ticket.order_id) {
           await supabase.from("orders").update({ status: "DELIVERED" }).eq("id", ticket.order_id);
         }
+        startReturnToBase();
       }
     }, TELEMETRY_UPDATE_MS);
-  }, [addLog]);
+
+    simulationsRef.current[ticket.id] = { interval: outboundInterval, timer, droneId: activeDroneId };
+  }, [addLog, clearSimulation, selectedDroneId]);
 
   useEffect(() => {
     if (!selectedTicket) return;
@@ -251,6 +477,7 @@ export default function AdminControlCenter() {
 
       if (data) {
         const tel = data as {
+          drone_id?: string;
           lat: number; lng: number; alt: number; battery: number;
           speed: number; heading: number; phase: FlightPhase;
           active_waypoint_index: number; route_path: RoutePoint[];
@@ -258,11 +485,17 @@ export default function AdminControlCenter() {
         applyTelemetry(tel);
         if (selectedTicket.status === "IN_FLIGHT") {
           setDroneState("AIRBORNE");
-          if (!intervalRef.current && tel.route_path?.length > 1) {
-            smsSentRef.current = !!selectedTicket.sms_sent;
+          if (!simulationsRef.current[selectedTicket.id] && tel.route_path?.length > 1) {
+            smsSentRef.current[selectedTicket.id] = !!selectedTicket.sms_sent;
+            const resumeDroneId = selectedTicket.drone_id || tel.drone_id || selectedDroneId || DEFAULT_DRONE_ID;
+            const resumeBase = getDroneBasePosition(resumeDroneId);
+            setSelectedDroneId(resumeDroneId);
             const resumePlan = createFlightPlan(
               { lat: selectedTicket.latitude, lng: selectedTicket.longitude },
-              { urgencyLevel: (selectedTicket.urgency_level as UrgencyLevel) || "STANDARD" }
+              {
+                urgencyLevel: (selectedTicket.urgency_level as UrgencyLevel) || "STANDARD",
+                origin: { lat: resumeBase.lat, lng: resumeBase.lng },
+              }
             );
             resumePlan.routePath = tel.route_path;
             const progress = estimateProgressFromTelemetry(
@@ -270,18 +503,19 @@ export default function AdminControlCenter() {
             );
             setFlightProgress(Math.round(progress * 100));
             addLog(`↻ Resumed at ${Math.round(progress * 100)}% — continuing from last position`);
-            launchSimulationLoop(selectedTicket, resumePlan, progress);
+            launchSimulationLoop({ ...selectedTicket, drone_id: resumeDroneId }, resumePlan, progress);
           }
         }
         if (selectedTicket.status === "DELIVERED") setDroneState("DELIVERED");
       } else {
-        setDronePosition({ lat: -1.2921, lng: 36.8219, alt: 0 });
+        setDronePosition(getDroneBasePosition(selectedTicket.drone_id || selectedDroneId));
         setBattery(100);
         setCurrentSpeed(0);
         setCurrentHeading(0);
         setActiveWaypointIndex(0);
         setRoutePath([]);
         setCurrentPhase("LAUNCH");
+        setDroneState(selectedTicket.status === "IN_FLIGHT" ? "AIRBORNE" : selectedTicket.status === "DELIVERED" ? "DELIVERED" : "IDLE");
       }
     };
 
@@ -316,15 +550,30 @@ export default function AdminControlCenter() {
     return () => {
       supabase.removeChannel(telCh);
     };
-  }, [selectedTicket, applyTelemetry, launchSimulationLoop]);
+  }, [selectedTicket, selectedDroneId, applyTelemetry, launchSimulationLoop, addLog]);
 
   // ── Flight sim ──
   const handleLaunchVector = useCallback(async () => {
     if (!selectedTicket || selectedTicket.status === "DELIVERED" || droneState === "DELIVERED") return;
-    if (intervalRef.current) clearInterval(intervalRef.current);
-    if (timerRef.current) clearInterval(timerRef.current);
-    intervalRef.current = null;
-    timerRef.current = null;
+    const launchDroneId = selectedTicket.drone_id || selectedDroneId || DEFAULT_DRONE_ID;
+    const launchBase = getDroneBasePosition(launchDroneId);
+    const busyTicket = tickets.find((ticket) =>
+      ticket.drone_id === launchDroneId &&
+      ticket.status === "IN_FLIGHT" &&
+      ticket.id !== selectedTicket.id
+    );
+    const returningDrone = fleetTelemetry[launchDroneId]?.phase === "RETURNING";
+
+    if (busyTicket) {
+      addLog(`Launch paused - ${launchDroneId} is already assigned to FLT-${busyTicket.id.substring(0, 5).toUpperCase()}`);
+      return;
+    }
+    if (returningDrone) {
+      addLog(`Launch paused - ${launchDroneId} is returning to base.`);
+      return;
+    }
+
+    setSelectedDroneId(launchDroneId);
 
     const commandRes = await fetch("/api/missions/command", {
       method: "POST",
@@ -334,7 +583,7 @@ export default function AdminControlCenter() {
         order_id: selectedTicket.order_id,
         command: "launch",
         source: "admin",
-        payload: { reset: selectedTicket.status === "IN_FLIGHT" },
+        payload: { reset: selectedTicket.status === "IN_FLIGHT", drone_id: launchDroneId },
       }),
     });
     const commandData = await commandRes.json().catch(() => null);
@@ -349,8 +598,9 @@ export default function AdminControlCenter() {
       await supabase.from("drone_telemetry").upsert({
         ticket_id: selectedTicket.id,
         order_id: selectedTicket.order_id,
-        lat: -1.2921,
-        lng: 36.8219,
+        drone_id: launchDroneId,
+        lat: launchBase.lat,
+        lng: launchBase.lng,
         alt: 0,
         battery: 100,
         speed: 0,
@@ -364,7 +614,7 @@ export default function AdminControlCenter() {
 
     setFlightProgress(0);
     setElapsedTime(0);
-    setDronePosition({ lat: -1.2921, lng: 36.8219, alt: 0 });
+    setDronePosition(launchBase);
     setBattery(100);
     setCurrentSpeed(0);
     setCurrentHeading(0);
@@ -372,11 +622,11 @@ export default function AdminControlCenter() {
     setActiveWaypointIndex(0);
     setRoutePath([]);
     setDroneState("AIRBORNE");
-    smsSentRef.current = false;
-    addLog("🚀 Launch vector approved. Drone ascending...");
+    smsSentRef.current[selectedTicket.id] = false;
+    addLog(`🚀 Launch vector approved for ${launchDroneId}. Drone ascending...`);
 
-    await supabase.from("tickets").update({ status: "IN_FLIGHT" }).eq("id", selectedTicket.id);
-    setSelectedTicket((curr) => curr?.id === selectedTicket.id ? { ...curr, status: "IN_FLIGHT" } : curr);
+    await supabase.from("tickets").update({ status: "IN_FLIGHT", drone_id: launchDroneId }).eq("id", selectedTicket.id);
+    setSelectedTicket((curr) => curr?.id === selectedTicket.id ? { ...curr, status: "IN_FLIGHT", drone_id: launchDroneId } : curr);
     if (selectedTicket.order_id) {
       await supabase.from("orders").update({ status: "IN_FLIGHT" }).eq("id", selectedTicket.order_id);
     }
@@ -386,6 +636,7 @@ export default function AdminControlCenter() {
       {
         urgencyLevel: (selectedTicket.urgency_level as UrgencyLevel) || "STANDARD",
         cruiseAltitude: aiPlan?.validated ? aiPlan.altitude : demoCruiseAltitude,
+        origin: { lat: launchBase.lat, lng: launchBase.lng },
       }
     );
 
@@ -399,17 +650,23 @@ export default function AdminControlCenter() {
     }
 
     setCurrentHeading(0);
-    launchSimulationLoop(selectedTicket, plan, 0);
-  }, [selectedTicket, droneState, addLog, demoCruiseAltitude, aiPlan, launchSimulationLoop]);
+    launchSimulationLoop({ ...selectedTicket, drone_id: launchDroneId }, plan, 0);
+  }, [selectedTicket, selectedDroneId, tickets, fleetTelemetry, droneState, addLog, demoCruiseAltitude, aiPlan, launchSimulationLoop]);
 
   useEffect(() => {
+    const simulations = simulationsRef.current;
     return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-      if (timerRef.current) clearInterval(timerRef.current);
+      Object.values(simulations).forEach((simulation) => {
+        clearInterval(simulation.interval);
+        clearInterval(simulation.timer);
+      });
     };
   }, []);
 
-  useEffect(() => { setAiPlan(null); }, [selectedTicket?.id]);
+  useEffect(() => {
+    const resetPlan = window.setTimeout(() => { setAiPlan(null); }, 0);
+    return () => { window.clearTimeout(resetPlan); };
+  }, [selectedTicket?.id]);
 
   const handleAIPlanRoute = useCallback(async () => {
     if (!selectedTicket) return;
@@ -445,10 +702,30 @@ export default function AdminControlCenter() {
     ? formatDistance(remainingDistance({ lat: dronePosition.lat, lng: dronePosition.lng }, { lat: selectedTicket.latitude, lng: selectedTicket.longitude }))
     : "—";
 
+  const selectedDrone: DroneFleetUnit = DRONE_FLEET.find((drone) => drone.id === selectedDroneId) ?? DRONE_FLEET[0];
+  const activeDroneId = selectedTicket?.drone_id || selectedDroneId;
+  const fleetCards = DRONE_FLEET.map((drone) => {
+    const assignedTicket =
+      tickets.find((ticket) => ticket.drone_id === drone.id && ticket.status === "IN_FLIGHT") ??
+      tickets.find((ticket) => ticket.drone_id === drone.id && ticket.status !== "DELIVERED");
+    const telemetry = fleetTelemetry[drone.id];
+    const state = getFleetState(assignedTicket, activeDroneId, drone.id, droneState, telemetry);
+    return { drone, assignedTicket, telemetry, state };
+  });
+  const selectedDroneBusyTicket = selectedTicket
+    ? tickets.find((ticket) =>
+        ticket.drone_id === selectedDroneId &&
+        ticket.status === "IN_FLIGHT" &&
+        ticket.id !== selectedTicket.id
+      )
+    : null;
+  const selectedDroneReturning = fleetTelemetry[selectedDroneId]?.phase === "RETURNING";
+
   // ── Admin Tab Bar ──
   const ADMIN_TABS: { key: AdminTab; label: string; icon: string }[] = [
     { key: "dispatch", label: "Dispatch", icon: "🛰️" },
     { key: "products", label: "Products", icon: "📦" },
+    { key: "orders", label: "Orders", icon: "🧾" },
     { key: "revenue", label: "Revenue", icon: "💰" },
   ];
 
@@ -495,7 +772,10 @@ export default function AdminControlCenter() {
               ) : tickets.map((t) => (
                 <button
                   key={t.id}
-                  onClick={() => setSelectedTicket(t)}
+                  onClick={() => {
+                    setSelectedTicket(t);
+                    setMapFocusKey((key) => key + 1);
+                  }}
                   className={`w-full text-left p-3 rounded-2xl border transition-all cursor-pointer ${
                     selectedTicket?.id === t.id ? "bg-white/80 border-white shadow-sm scale-[1.02]" : "bg-white/30 border-white/40 hover:bg-white/50"
                   } ${t.urgency_level === "CRITICAL" ? "ring-1 ring-red-300" : ""}`}
@@ -521,7 +801,7 @@ export default function AdminControlCenter() {
               <div className="flex items-center gap-2">
                 <div className="bg-slate-800 text-white px-3 py-1.5 rounded-full text-[10px] font-bold tracking-wider">3D REALISTIC</div>
                 <div className="flex bg-white/50 border border-white/60 rounded-full p-0.5">
-                  {(["follow", "chase"] as const).map((mode) => (
+                  {(["free", "follow", "chase"] as const).map((mode) => (
                     <button
                       key={mode}
                       onClick={() => setCameraMode(mode)}
@@ -529,7 +809,7 @@ export default function AdminControlCenter() {
                         cameraMode === mode ? "bg-slate-800 text-white" : "text-slate-500 hover:text-slate-700"
                       }`}
                     >
-                      {mode === "follow" ? "TOP" : "CHASE"}
+                      {mode === "free" ? "FREE" : mode === "follow" ? "TOP" : "CHASE"}
                     </button>
                   ))}
                 </div>
@@ -549,9 +829,9 @@ export default function AdminControlCenter() {
                   />
                 </label>
                 <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[9px] font-bold uppercase tracking-wider ${
-                  droneState === "IDLE" ? "bg-slate-100 text-slate-500" : droneState === "AIRBORNE" ? "bg-[#e65328]/10 text-[#e65328]" : droneState === "DELIVERED" ? "bg-emerald-100 text-emerald-600" : "bg-red-100 text-red-600"
+                  droneState === "IDLE" ? "bg-slate-100 text-slate-500" : droneState === "AIRBORNE" ? "bg-[#e65328]/10 text-[#e65328]" : droneState === "RETURNING" ? "bg-blue-100 text-blue-600" : droneState === "DELIVERED" ? "bg-emerald-100 text-emerald-600" : "bg-red-100 text-red-600"
                 }`}>
-                  <span className={`w-1.5 h-1.5 rounded-full ${droneState === "AIRBORNE" ? "bg-[#e65328] animate-pulse" : droneState === "DELIVERED" ? "bg-emerald-500" : "bg-slate-400"}`} />
+                  <span className={`w-1.5 h-1.5 rounded-full ${droneState === "AIRBORNE" ? "bg-[#e65328] animate-pulse" : droneState === "RETURNING" ? "bg-blue-500 animate-pulse" : droneState === "DELIVERED" ? "bg-emerald-500" : "bg-slate-400"}`} />
                   {droneState}
                 </div>
                 <span className="text-[10px] font-mono font-bold text-slate-600 bg-white/50 px-2.5 py-1 rounded-full border border-white/60">{formatTime(elapsedTime)}</span>
@@ -559,22 +839,17 @@ export default function AdminControlCenter() {
             </div>
 
             <div className="flex-1 bg-white/40 backdrop-blur-xl border border-white/60 rounded-3xl overflow-hidden shadow-[0_8px_32px_-8px_rgba(0,0,0,0.06)]">
-              {selectedTicket ? (
-                <FPVMap
-                  dronePosition={dronePosition}
-                  targetPosition={{ lat: selectedTicket.latitude, lng: selectedTicket.longitude }}
-                  routePath={routePath}
-                  heading={currentHeading}
-                  activeWaypointIndex={activeWaypointIndex}
-                  followZoom={followZoom}
-                  cameraMode={cameraMode}
-                  isAiRoute={isAiRoute}
-                />
-              ) : (
-                <div className="w-full h-full flex items-center justify-center text-slate-400">
-                  <div className="text-center"><span className="text-2xl block mb-2">⛛</span><p className="text-xs font-bold uppercase tracking-widest">System Standby</p></div>
-                </div>
-              )}
+              <FPVMap
+                dronePosition={dronePosition}
+                targetPosition={selectedTicket ? { lat: selectedTicket.latitude, lng: selectedTicket.longitude } : { lat: selectedDrone.baseLat, lng: selectedDrone.baseLng }}
+                routePath={routePath}
+                heading={currentHeading}
+                activeWaypointIndex={activeWaypointIndex}
+                followZoom={followZoom}
+                cameraMode={cameraMode}
+                focusKey={mapFocusKey}
+                isAiRoute={isAiRoute}
+              />
             </div>
 
             <div className="bg-white/40 backdrop-blur-xl border border-white/60 rounded-2xl px-4 py-2.5 shadow-[0_4px_16px_-4px_rgba(0,0,0,0.04)]">
@@ -589,13 +864,66 @@ export default function AdminControlCenter() {
 
           {/* Command Panel */}
           <div className="w-[25%] h-full bg-white/40 backdrop-blur-xl border border-white/60 rounded-3xl p-4 shadow-[0_8px_32px_-8px_rgba(0,0,0,0.06)] flex flex-col overflow-hidden">
+            <div className="mb-3">
+              <h2 className="text-sm font-bold text-[#1a202c]">Command Center</h2>
+              <p className="text-[10px] text-slate-500">{selectedDrone.id} · {selectedDrone.name}</p>
+            </div>
+
+            <div className="bg-white/40 border border-white/60 rounded-xl p-2.5 mb-3">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-[8px] font-bold text-slate-400 uppercase tracking-widest">Fleet Tracker</p>
+                <span className="text-[8px] font-bold text-slate-500">{DRONE_FLEET.length} drones</span>
+              </div>
+              <div className="space-y-1 max-h-40 overflow-y-auto custom-scrollbar pr-1">
+                {fleetCards.map(({ drone, assignedTicket, telemetry, state }) => (
+                  <button
+                    key={drone.id}
+                    onClick={() => {
+                      setSelectedDroneId(drone.id);
+                      setMapFocusKey((key) => key + 1);
+                      if (assignedTicket) {
+                        setSelectedTicket(assignedTicket);
+                        return;
+                      }
+                      const base = getDroneBasePosition(drone.id);
+                      setSelectedTicket(null);
+                      setDroneState(state === "RETURNING" ? "RETURNING" : "IDLE");
+                      setCurrentPhase(telemetry?.phase ?? "LAUNCH");
+                      setRoutePath(telemetry?.route_path ?? []);
+                      setCurrentSpeed(telemetry?.speed ?? 0);
+                      setCurrentHeading(telemetry?.heading ?? 0);
+                      setBattery(telemetry?.battery ?? 100);
+                      setDronePosition(telemetry ? { lat: telemetry.lat, lng: telemetry.lng, alt: telemetry.alt ?? 0 } : base);
+                    }}
+                    className={`w-full rounded-lg border px-2 py-1.5 text-left transition-all cursor-pointer ${
+                      selectedDroneId === drone.id ? "border-[#e65328] bg-white/80 shadow-sm" : "border-white/60 bg-white/35 hover:bg-white/60"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[9px] font-mono font-bold text-slate-800">{drone.id}</span>
+                      <span className={`text-[7px] font-bold uppercase tracking-wider rounded-full px-1.5 py-0.5 ${
+                        state === "AIRBORNE" ? "bg-[#e65328]/10 text-[#e65328]" :
+                        state === "RETURNING" ? "bg-blue-100 text-blue-600" :
+                        state === "ASSIGNED" ? "bg-amber-100 text-amber-600" :
+                        state === "DELIVERED" ? "bg-emerald-100 text-emerald-600" :
+                        state === "OVERRIDE" ? "bg-red-100 text-red-600" :
+                        "bg-slate-100 text-slate-500"
+                      }`}>{state}</span>
+                    </div>
+                    <div className="mt-0.5 flex items-center justify-between gap-2 text-[8px] text-slate-500">
+                      <span className="truncate">{assignedTicket ? `FLT-${assignedTicket.id.substring(0, 5).toUpperCase()}` : `${drone.name} · ${drone.model}`}</span>
+                      <span className="font-mono">{telemetry?.battery ?? 100}%</span>
+                    </div>
+                    <p className="mt-0.5 truncate text-[8px] font-mono text-slate-400">
+                      {telemetry ? `${telemetry.lat.toFixed(4)}, ${telemetry.lng.toFixed(4)} · ${Math.round(telemetry.speed ?? 0)}km/h` : `${drone.baseLat.toFixed(4)}, ${drone.baseLng.toFixed(4)} · base`}
+                    </p>
+                  </button>
+                ))}
+              </div>
+            </div>
+
             {selectedTicket ? (
               <>
-                <div className="mb-3">
-                  <h2 className="text-sm font-bold text-[#1a202c]">Command Center</h2>
-                  <p className="text-[10px] text-slate-500">Drone SN-402</p>
-                </div>
-
                 <div className={`bg-white/50 border rounded-2xl p-3 shadow-sm mb-3 space-y-2 ${selectedTicket.urgency_level === "CRITICAL" ? "border-red-300 bg-red-50/30" : "border-white/80"}`}>
                   {selectedTicket.urgency_level === "CRITICAL" && (
                     <div className="bg-red-100 border border-red-200 rounded-xl px-2.5 py-1.5 flex items-center gap-1.5">
@@ -703,6 +1031,16 @@ export default function AdminControlCenter() {
                 </div>
 
                 <div className="space-y-2">
+                  {selectedDroneBusyTicket && (
+                    <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[9px] font-semibold text-amber-700">
+                      {selectedDrone.id} is busy on FLT-{selectedDroneBusyTicket.id.substring(0, 5).toUpperCase()}.
+                    </p>
+                  )}
+                  {selectedDroneReturning && (
+                    <p className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-[9px] font-semibold text-blue-700">
+                      {selectedDrone.id} is returning to base.
+                    </p>
+                  )}
                   <button
                     onClick={handleAIPlanRoute}
                     disabled={aiPlanLoading || droneState === "AIRBORNE" || droneState === "DELIVERED" || selectedTicket.status === "DELIVERED"}
@@ -710,11 +1048,11 @@ export default function AdminControlCenter() {
                   >
                     {aiPlanLoading ? "Planning..." : "🤖 AI Plan Route"}
                   </button>
-                  <button onClick={handleLaunchVector} disabled={droneState === "DELIVERED" || selectedTicket.status === "DELIVERED"}
+                  <button onClick={handleLaunchVector} disabled={droneState === "DELIVERED" || selectedTicket.status === "DELIVERED" || Boolean(selectedDroneBusyTicket) || selectedDroneReturning}
                     className="w-full bg-[#e65328] hover:bg-[#d4431b] cursor-pointer text-white font-semibold py-3 rounded-2xl text-[10px] tracking-wider uppercase shadow-[0_4px_12px_rgba(230,83,40,0.25)] transition-all disabled:opacity-50 disabled:cursor-not-allowed">
-                    {droneState === "DELIVERED" || selectedTicket.status === "DELIVERED" ? "Delivered ✓" : selectedTicket.status === "IN_FLIGHT" ? "Reset & Relaunch Vector" : "Approve & Launch Vector"}
+                    {selectedDroneReturning ? "Drone Returning" : selectedDroneBusyTicket ? "Selected Drone Busy" : droneState === "DELIVERED" || selectedTicket.status === "DELIVERED" ? "Delivered ✓" : selectedTicket.status === "IN_FLIGHT" ? "Reset & Relaunch Vector" : "Approve & Launch Vector"}
                   </button>
-                  <button onClick={() => { if (intervalRef.current) clearInterval(intervalRef.current); if (timerRef.current) clearInterval(timerRef.current); setDroneState("OVERRIDE"); addLog("⚠️ Override engaged."); }}
+                  <button onClick={() => { if (selectedTicket) clearSimulation(selectedTicket.id); setDroneState("OVERRIDE"); addLog("⚠️ Override engaged."); }}
                     className="w-full bg-red-600/10 hover:bg-red-600 cursor-pointer hover:text-white text-red-600 border border-red-200 hover:border-red-600 font-bold py-2.5 rounded-2xl text-[9px] tracking-wider uppercase transition-all">
                     Manual Gyro Override
                   </button>
@@ -735,6 +1073,15 @@ export default function AdminControlCenter() {
         <div className="relative z-10 flex-1 p-3 overflow-y-auto">
           <div className="max-w-4xl mx-auto bg-white/40 backdrop-blur-xl border border-white/60 rounded-3xl p-6 shadow-[0_8px_32px_-8px_rgba(0,0,0,0.06)]">
             <ProductManager />
+          </div>
+        </div>
+      )}
+
+      {/* ── ORDERS TAB ── */}
+      {adminTab === "orders" && (
+        <div className="relative z-10 flex-1 p-3 overflow-y-auto">
+          <div className="max-w-6xl mx-auto bg-white/40 backdrop-blur-xl border border-white/60 rounded-3xl p-6 shadow-[0_8px_32px_-8px_rgba(0,0,0,0.06)]">
+            <PurchaseLogPanel />
           </div>
         </div>
       )}

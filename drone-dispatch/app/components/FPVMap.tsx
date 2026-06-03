@@ -14,7 +14,8 @@ interface FPVMapProps {
   heading?: number;
   activeWaypointIndex?: number;
   followZoom?: number;
-  cameraMode?: "follow" | "chase";
+  cameraMode?: "free" | "follow" | "chase";
+  focusKey?: number;
   isAiRoute?: boolean;
 }
 
@@ -40,6 +41,11 @@ type DroneModelState = {
 type DroneModelLayer = mapboxgl.CustomLayerInterface & {
   dispose?: () => void;
 };
+type StyleLayerSummary = {
+  id?: string;
+  type?: string;
+  layout?: Record<string, unknown>;
+};
 
 const BASE_POSITION: RoutePoint = { lat: -1.2921, lng: 36.8219, alt: 8, kind: "base" };
 const TACTICAL_STYLE = "mapbox://styles/mapbox/streets-v12";
@@ -63,7 +69,8 @@ export default function FPVMap({
   heading = 0,
   activeWaypointIndex = 0,
   followZoom = DEFAULT_FOLLOW_ZOOM,
-  cameraMode = "follow",
+  cameraMode = "free",
+  focusKey = 0,
   isAiRoute = false,
 }: FPVMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -248,8 +255,14 @@ export default function FPVMap({
     setSourceData(map, SOURCE_ROUTE, routeData);
     setSourceData(map, SOURCE_TRAVELED, traveledData);
     setSourceData(map, SOURCE_WAYPOINTS, waypointData);
+  }, [routeData, traveledData, waypointData]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !map.isStyleLoaded()) return;
+
     setSourceData(map, SOURCE_HEADING, headingData);
-  }, [headingData, routeData, traveledData, waypointData]);
+  }, [headingData]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -276,7 +289,7 @@ export default function FPVMap({
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map) return;
+    if (!map || cameraMode === "free") return;
 
     const target = cameraMode === "chase"
       ? chaseCameraTarget(dronePosition, heading, followZoom)
@@ -291,6 +304,21 @@ export default function FPVMap({
       essential: true,
     });
   }, [dronePosition, heading, followZoom, cameraMode]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !focusKey) return;
+
+    const target = followCameraTarget(dronePosition, followZoom);
+    map.easeTo({
+      center: target.center,
+      zoom: target.zoom,
+      pitch: target.pitch,
+      bearing: target.bearing,
+      duration: 450,
+      essential: true,
+    });
+  }, [focusKey, dronePosition, followZoom]);
 
   return (
     <div className="relative w-full h-full bg-[#edf1f3]" style={{ minHeight: "200px" }}>
@@ -397,7 +425,7 @@ function createDroneModelLayer(
     id: DRONE_MODEL_LAYER,
     type: "custom",
     renderingMode: "3d",
-    onAdd: (_map, gl) => {
+    onAdd: (_map: MapboxMap, gl: WebGLRenderingContext) => {
       camera = new THREE.Camera();
       scene = new THREE.Scene();
 
@@ -436,7 +464,7 @@ function createDroneModelLayer(
         }
       );
     },
-    render: (_gl, matrix) => {
+    render: (_gl: WebGLRenderingContext, matrix: number[]) => {
       if (!renderer || !scene || !camera || !modelRoot) return;
 
       const { position, heading } = stateRef.current;
@@ -444,7 +472,7 @@ function createDroneModelLayer(
       const mercator = mapboxgl.MercatorCoordinate.fromLngLat(center, Math.max(position.alt, 12));
       const meterScale = mercator.meterInMercatorCoordinateUnits() * DRONE_MODEL_SCALE_METERS;
 
-      const mapMatrix = new THREE.Matrix4().fromArray(matrix as number[]);
+      const mapMatrix = new THREE.Matrix4().fromArray(matrix);
       const transformMatrix = new THREE.Matrix4()
         .makeTranslation(mercator.x, mercator.y, mercator.z)
         .scale(new THREE.Vector3(meterScale, -meterScale, meterScale))
@@ -454,7 +482,6 @@ function createDroneModelLayer(
       camera.projectionMatrix = mapMatrix.multiply(transformMatrix);
       renderer.resetState();
       renderer.render(scene, camera);
-      map.triggerRepaint();
     },
     dispose: () => {
       if (modelRoot) {
@@ -476,7 +503,7 @@ function addBuildingExtrusions(map: MapboxMap) {
   if (map.getLayer("3d-buildings") || !map.getSource("composite")) return;
 
   const labelLayerId = map.getStyle().layers?.find(
-    (layer) => layer.type === "symbol" && typeof layer.layout?.["text-field"] !== "undefined"
+    (layer: StyleLayerSummary) => layer.type === "symbol" && typeof layer.layout?.["text-field"] !== "undefined"
   )?.id;
 
   try {

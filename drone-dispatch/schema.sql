@@ -72,14 +72,20 @@ CREATE TABLE IF NOT EXISTS tickets (
   longitude DOUBLE PRECISION,
   status TEXT DEFAULT 'PENDING',
   sms_sent BOOLEAN DEFAULT FALSE,
+  drone_id TEXT,
   order_id UUID REFERENCES orders(id)
 );
+
+ALTER TABLE public.tickets ADD COLUMN IF NOT EXISTS drone_id TEXT;
+CREATE INDEX IF NOT EXISTS tickets_drone_id_idx
+  ON public.tickets(drone_id);
 
 -- ── Drone Telemetry ──
 CREATE TABLE IF NOT EXISTS drone_telemetry (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   ticket_id UUID,
   order_id UUID REFERENCES orders(id),
+  drone_id TEXT,
   lat DOUBLE PRECISION,
   lng DOUBLE PRECISION,
   alt DOUBLE PRECISION DEFAULT 0,
@@ -93,11 +99,14 @@ CREATE TABLE IF NOT EXISTS drone_telemetry (
 );
 
 ALTER TABLE public.drone_telemetry ADD COLUMN IF NOT EXISTS order_id UUID REFERENCES orders(id);
+ALTER TABLE public.drone_telemetry ADD COLUMN IF NOT EXISTS drone_id TEXT;
 ALTER TABLE public.drone_telemetry ADD COLUMN IF NOT EXISTS phase TEXT DEFAULT 'LAUNCH';
 ALTER TABLE public.drone_telemetry ADD COLUMN IF NOT EXISTS active_waypoint_index INT DEFAULT 0;
 ALTER TABLE public.drone_telemetry ADD COLUMN IF NOT EXISTS route_path JSONB DEFAULT '[]'::jsonb;
 CREATE UNIQUE INDEX IF NOT EXISTS drone_telemetry_ticket_unique
   ON public.drone_telemetry(ticket_id);
+CREATE INDEX IF NOT EXISTS drone_telemetry_drone_id_idx
+  ON public.drone_telemetry(drone_id);
 
 -- Mission events are the audit trail and future command bus for Claude/control actions.
 CREATE TABLE IF NOT EXISTS mission_events (

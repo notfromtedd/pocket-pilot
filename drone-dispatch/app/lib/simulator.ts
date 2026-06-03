@@ -32,7 +32,7 @@ export interface FlightPlan {
   routePath: RoutePoint[];
 }
 
-export type FlightPhase = "LAUNCH" | "CLIMB" | "CRUISE" | "APPROACH" | "DESCENT" | "DELIVERED";
+export type FlightPhase = "LAUNCH" | "CLIMB" | "CRUISE" | "APPROACH" | "DESCENT" | "DELIVERED" | "RETURNING";
 export type RoutePointKind = "base" | "climb" | "cruise" | "turn" | "approach" | "target";
 
 export interface RoutePoint extends GeoPoint {
@@ -44,6 +44,7 @@ export interface FlightPlanOptions {
   urgencyLevel?: "STANDARD" | "HIGH" | "CRITICAL";
   cruiseAltitude?: number;
   maxSpeed?: number;
+  origin?: GeoPoint;
 }
 
 // ── CONSTANTS ──
@@ -144,7 +145,7 @@ export function remainingDistance(drone: GeoPoint, target: GeoPoint): number {
 export function createFlightPlan(target: GeoPoint, options: FlightPlanOptions = {}): FlightPlan {
   const urgencyLevel = options.urgencyLevel ?? "STANDARD";
   const cruiseAltitude = Math.round((options.cruiseAltitude ?? DEFAULT_CRUISE_ALT) * URGENCY_ALTITUDE_BOOST[urgencyLevel]);
-  const origin = { lat: -1.2921, lng: 36.8219 };
+  const origin = options.origin ?? { lat: -1.2921, lng: 36.8219 };
   return {
     origin, // Nairobi base (near KICC)
     destination: target,
