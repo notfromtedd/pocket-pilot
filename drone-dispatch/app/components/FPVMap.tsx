@@ -5,7 +5,7 @@ import mapboxgl, { type GeoJSONSource, type LngLatLike, type Map as MapboxMap, t
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import "mapbox-gl/dist/mapbox-gl.css";
-import { densifyRoutePath, type RoutePoint } from "../lib/simulator";
+import { densifyRoutePath, haversineDistance, type RoutePoint } from "../lib/simulator";
 
 interface FPVMapProps {
   dronePosition: { lat: number; lng: number; alt: number };
@@ -15,6 +15,7 @@ interface FPVMapProps {
   activeWaypointIndex?: number;
   followZoom?: number;
   cameraMode?: "free" | "follow" | "chase";
+  onCameraModeChange?: (mode: "free" | "follow" | "chase") => void;
   focusKey?: number;
   isAiRoute?: boolean;
 }
@@ -70,6 +71,7 @@ export default function FPVMap({
   activeWaypointIndex = 0,
   followZoom = DEFAULT_FOLLOW_ZOOM,
   cameraMode = "free",
+  onCameraModeChange,
   focusKey = 0,
   isAiRoute = false,
 }: FPVMapProps) {
@@ -86,6 +88,12 @@ export default function FPVMap({
   const [loading, setLoading] = useState(Boolean(mapboxToken));
   const [mapReady, setMapReady] = useState(false);
   const mapReadyRef = useRef(false);
+
+  const targetPositionRef = useRef(dronePosition);
+  const targetHeadingRef = useRef(heading);
+
+  const currentPositionRef = useRef({ ...dronePosition });
+  const currentHeadingRef = useRef(heading);
 
   const tacticalRoute = useMemo<RoutePoint[]>(() => {
     if (routePath.length > 1) return routePath;
@@ -110,10 +118,7 @@ export default function FPVMap({
     latestDataRef.current = { routeData, traveledData, waypointData, headingData };
   }, [headingData, routeData, traveledData, waypointData]);
 
-  useEffect(() => {
-    droneModelStateRef.current = { position: dronePosition, heading };
-    mapRef.current?.triggerRepaint();
-  }, [dronePosition, heading]);
+
 
   useEffect(() => {
     if (!containerRef.current || !mapboxToken) return;
@@ -143,6 +148,12 @@ export default function FPVMap({
 
     map.touchZoomRotate.disableRotation();
     map.keyboard.disableRotation();
+
+    map.on("movestart", (e) => {
+      if (e.originalEvent && onCameraModeChange) {
+        onCameraModeChange("free");
+      }
+    });
 
     const resizeObserver = new ResizeObserver(() => {
       map.resize();
@@ -190,17 +201,18 @@ export default function FPVMap({
         }
         setError(null);
       } catch (err) {
-        console.error("Mapbox tactical layer setup failed:", err);
+        console.warn("Mapbox tactical layer setup failed:", err instanceof Error ? err.message : err);
         setError("Mapbox loaded, but the 3D building/route layers failed to initialize.");
       }
       setLoading(false);
     };
 
     const onError = (event: mapboxgl.ErrorEvent) => {
-      console.error("Mapbox runtime error:", event.error);
       const message = event.error?.message ?? "";
       if (/401|403|token|unauthorized|forbidden/i.test(message)) {
         setError("Mapbox rejected the access token or style request. Check NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN and token URL restrictions.");
+      } else if (/failed to fetch|network|request/i.test(message)) {
+        setError("Mapbox could not fetch one of its map resources. Check the token restrictions and your internet connection, then refresh.");
       } else if (!mapReadyRef.current) {
         setError(message || "Mapbox failed before the map finished loading.");
       }
@@ -275,41 +287,128 @@ export default function FPVMap({
     }
   }, [isAiRoute, mapReady]);
 
+  // ── Sync target values and check if we need to snap ────────────────────────
   useEffect(() => {
-    droneMarkerRef.current?.setLngLat([dronePosition.lng, dronePosition.lat]);
-    targetMarkerRef.current?.setLngLat([targetPosition.lng, targetPosition.lat]);
-
-    const el = droneMarkerRef.current?.getElement();
-    if (el) {
-      el.style.setProperty("--drone-heading", `${heading}deg`);
-      const altitude = el.querySelector<HTMLSpanElement>("[data-altitude]");
-      if (altitude) altitude.textContent = `${Math.round(dronePosition.alt)}m`;
+    const curr = currentPositionRef.current;
+    const dist = haversineDistance(curr, dronePosition);
+    // If telemetry coordinates jump by >200m or are at base (alt 0), snap instantly
+    if (dist > 200 || dronePosition.alt === 0) {
+      curr.lat = dronePosition.lat;
+      curr.lng = dronePosition.lng;
+      curr.alt = dronePosition.alt;
+      currentHeadingRef.current = heading;
     }
-  }, [dronePosition, heading, targetPosition]);
+    targetPositionRef.current = dronePosition;
+    targetHeadingRef.current = heading;
+  }, [dronePosition, heading]);
 
+  // ── Target Marker update ───────────────────────────────────────────────────
   useEffect(() => {
-    const map = mapRef.current;
-    if (!map || cameraMode === "free") return;
+    targetMarkerRef.current?.setLngLat([targetPosition.lng, targetPosition.lat]);
+  }, [targetPosition]);
 
-    const target = cameraMode === "chase"
-      ? chaseCameraTarget(dronePosition, heading, followZoom)
-      : followCameraTarget(dronePosition, followZoom);
+  // ── Smooth interpolation animation loop ────────────────────────────────────
+  useEffect(() => {
+    let active = true;
+    let lastTime = performance.now();
 
-    map.easeTo({
-      center: target.center,
-      zoom: target.zoom,
-      pitch: target.pitch,
-      bearing: target.bearing,
-      duration: 200,
-      essential: true,
-    });
-  }, [dronePosition, heading, followZoom, cameraMode]);
+    const loop = (now: number) => {
+      if (!active) return;
 
+      const map = mapRef.current;
+      if (!map) {
+        requestAnimationFrame(loop);
+        return;
+      }
+
+      const elapsed = Math.min(50, now - lastTime);
+      lastTime = now;
+
+      // exponential decay factor for smooth catchup
+      const decayTime = 120; // 120ms half-life equivalent
+      const t = 1 - Math.exp(-elapsed / decayTime);
+
+      const curr = currentPositionRef.current;
+      const target = targetPositionRef.current;
+
+      const dLat = target.lat - curr.lat;
+      const dLng = target.lng - curr.lng;
+      const dAlt = target.alt - curr.alt;
+      const headingDiff = ((targetHeadingRef.current - currentHeadingRef.current + 180) % 360) - 180;
+
+      const hasMoved = Math.abs(dLat) > 1e-7 || Math.abs(dLng) > 1e-7 || Math.abs(dAlt) > 1e-2;
+      const hasRotated = Math.abs(headingDiff) > 1e-2;
+
+      if (hasMoved || hasRotated) {
+        // Interpolate position
+        curr.lat += dLat * t;
+        curr.lng += dLng * t;
+        curr.alt += dAlt * t;
+
+        // Interpolate heading
+        currentHeadingRef.current = interpolateHeading(currentHeadingRef.current, targetHeadingRef.current, t);
+
+        // Sync model state for the Three.js render method
+        droneModelStateRef.current = {
+          position: { lat: curr.lat, lng: curr.lng, alt: curr.alt },
+          heading: currentHeadingRef.current,
+        };
+
+        // Sync 2D marker fallback
+        if (droneMarkerRef.current) {
+          droneMarkerRef.current.setLngLat([curr.lng, curr.lat]);
+          const el = droneMarkerRef.current.getElement();
+          if (el) {
+            el.style.setProperty("--drone-heading", `${currentHeadingRef.current}deg`);
+            const altitudeEl = el.querySelector<HTMLSpanElement>("[data-altitude]");
+            if (altitudeEl) altitudeEl.textContent = `${Math.round(curr.alt)}m`;
+          }
+        }
+
+        // Repaint map to redraw the 3D custom layer
+        map.triggerRepaint();
+
+        // Dynamic heading line update
+        const headingSrc = map.getSource(SOURCE_HEADING) as mapboxgl.GeoJSONSource | undefined;
+        if (headingSrc) {
+          headingSrc.setData(headingFeatureCollection(curr, currentHeadingRef.current));
+        }
+
+        // Lock camera if follow or chase mode is active
+        if (cameraMode !== "free") {
+          const camTarget = cameraMode === "chase"
+            ? chaseCameraTarget(curr, currentHeadingRef.current, followZoom)
+            : followCameraTarget(curr, followZoom);
+
+          map.jumpTo({
+            center: camTarget.center,
+            zoom: camTarget.zoom,
+            pitch: camTarget.pitch,
+            bearing: camTarget.bearing,
+          });
+        }
+      }
+
+      requestAnimationFrame(loop);
+    };
+
+    requestAnimationFrame(loop);
+
+    return () => {
+      active = false;
+    };
+  }, [cameraMode, followZoom]);
+
+  // ── Camera focus transition (one-time smooth ease when button is clicked) ──
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !focusKey) return;
 
-    const target = followCameraTarget(dronePosition, followZoom);
+    // Temporarily snap the interpolated coordinates to target coordinates to avoid lag
+    currentPositionRef.current = { ...targetPositionRef.current };
+    currentHeadingRef.current = targetHeadingRef.current;
+
+    const target = followCameraTarget(targetPositionRef.current, followZoom);
     map.easeTo({
       center: target.center,
       zoom: target.zoom,
@@ -318,7 +417,7 @@ export default function FPVMap({
       duration: 450,
       essential: true,
     });
-  }, [focusKey, dronePosition, followZoom]);
+  }, [focusKey, followZoom]);
 
   return (
     <div className="relative w-full h-full bg-[#edf1f3]" style={{ minHeight: "200px" }}>
@@ -517,7 +616,7 @@ function addBuildingExtrusions(map: MapboxMap) {
         "fill-extrusion-color": "#9ca3af",
         "fill-extrusion-height": ["coalesce", ["get", "height"], 20],
         "fill-extrusion-base": ["coalesce", ["get", "min_height"], 0],
-        "fill-extrusion-opacity": 0.65,
+        "fill-extrusion-opacity": 0.85,
         "fill-extrusion-vertical-gradient": true,
       },
     }, labelLayerId);
@@ -680,4 +779,11 @@ function clampCoord(coord: Coord): Coord {
 function clampNumber(value: number, min: number, max: number): number {
   if (!isFinite(value)) return min;
   return Math.min(max, Math.max(min, value));
+}
+
+function interpolateHeading(current: number, target: number, step: number): number {
+  let diff = target - current;
+  // Normalize difference to [-180, 180]
+  diff = ((diff + 180) % 360) - 180;
+  return (current + diff * step + 360) % 360;
 }

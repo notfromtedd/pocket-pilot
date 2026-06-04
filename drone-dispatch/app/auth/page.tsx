@@ -3,8 +3,8 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import {
+  EMAIL_OTP_LENGTH,
   MAX_EMAIL_OTP_LENGTH,
-  MIN_EMAIL_OTP_LENGTH,
   requestSignInCode,
   requestSignUpCode,
   verifyEmailCode,
@@ -222,7 +222,7 @@ export default function AuthPage() {
                     className="w-full bg-transparent text-lg text-center focus:outline-none text-slate-800 font-mono font-bold tracking-[0.32em]"
                     value={otpCode}
                     onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, "").slice(0, MAX_EMAIL_OTP_LENGTH))}
-                    placeholder="00000000"
+                    placeholder={"0".repeat(EMAIL_OTP_LENGTH)}
                     maxLength={MAX_EMAIL_OTP_LENGTH}
                     required
                   />
@@ -231,7 +231,7 @@ export default function AuthPage() {
 
               <button
                 type="submit"
-                disabled={loading || otpCode.length < MIN_EMAIL_OTP_LENGTH}
+                disabled={loading || otpCode.length !== EMAIL_OTP_LENGTH}
                 className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-semibold py-3.5 rounded-2xl text-xs tracking-wider uppercase shadow-[0_4px_12px_rgba(16,185,129,0.25)] transition-all cursor-pointer disabled:cursor-not-allowed"
               >
                 {loading ? "Verifying..." : "Verify & Continue"}

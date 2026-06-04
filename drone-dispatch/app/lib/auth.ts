@@ -1,8 +1,9 @@
 import type { User } from '@supabase/supabase-js';
 import { supabase } from './supabase';
 
-export const MIN_EMAIL_OTP_LENGTH = 6;
-export const MAX_EMAIL_OTP_LENGTH = 10;
+export const EMAIL_OTP_LENGTH = 6;
+export const MIN_EMAIL_OTP_LENGTH = EMAIL_OTP_LENGTH;
+export const MAX_EMAIL_OTP_LENGTH = EMAIL_OTP_LENGTH;
 
 export interface UserSession {
   id: string;
@@ -81,7 +82,7 @@ export async function verifyEmailCode(
   if (!isValidEmail(cleanEmail) || !isValidEmailOtp(cleanToken)) {
     return {
       success: false,
-      error: `Enter the ${MIN_EMAIL_OTP_LENGTH}-${MAX_EMAIL_OTP_LENGTH} digit code sent to your email`,
+      error: `Enter the ${EMAIL_OTP_LENGTH}-digit code sent to your email`,
     };
   }
 
@@ -217,7 +218,7 @@ function isValidEmail(email: string) {
 }
 
 function isValidEmailOtp(token: string) {
-  return new RegExp(`^\\d{${MIN_EMAIL_OTP_LENGTH},${MAX_EMAIL_OTP_LENGTH}}$`).test(token);
+  return new RegExp(`^\\d{${EMAIL_OTP_LENGTH}}$`).test(token);
 }
 
 function getEmailRedirectTo() {
