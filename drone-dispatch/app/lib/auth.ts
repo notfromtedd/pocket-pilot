@@ -1,7 +1,7 @@
 import type { User } from '@supabase/supabase-js';
 import { supabase } from './supabase';
 
-export const EMAIL_OTP_LENGTH = 6;
+export const EMAIL_OTP_LENGTH = 8;
 export const MIN_EMAIL_OTP_LENGTH = EMAIL_OTP_LENGTH;
 export const MAX_EMAIL_OTP_LENGTH = EMAIL_OTP_LENGTH;
 
@@ -222,8 +222,7 @@ function isValidEmailOtp(token: string) {
 }
 
 function getEmailRedirectTo() {
-  if (typeof window === 'undefined') return undefined;
-  return `${window.location.origin}/customer`;
+  return `http://localhost:3000/customer`;
 }
 
 async function requestEmailOtp({
