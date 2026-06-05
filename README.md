@@ -1,6 +1,6 @@
 # Drone Dispatch
 
-AI-powered drone delivery dispatch system for Nairobi. Dual interface — customer shop with live order tracking, and an admin command center with 3D flight visualization.
+AI-powered drone delivery dispatch system for medical emergencies in Nairobi. Dual interface — customer shop with live order tracking, and an admin command center with 3D flight visualization.
 
 ---
 
