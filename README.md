@@ -14,7 +14,7 @@ AI-powered drone delivery dispatch system for Nairobi. Dual interface — custom
 
 ## Key Features
 
-- **AI flight planner** — Claude (or Gemini fallback) generates waypoint routes from any drone base to any Nairobi destination, reasoning around airspace hazards (CBD towers, JKIA corridor, embassy zones, etc.) specific to that route's bearing
+- **AI flight planner** — Claude generates waypoint routes from any drone base to any Nairobi destination, reasoning around airspace hazards (CBD towers, JKIA corridor, embassy zones, etc.) specific to that route's bearing
 - **Emergency voice dispatch** — speech recognition feeds a transcript to AI, which matches it to inventory and auto-creates a prioritized ticket with coordinates
 - **Real-time fleet telemetry** — Supabase Realtime pushes drone position, altitude, battery, and flight phase at 250ms intervals
 - **3D FPV map** — Mapbox GL + Three.js renders a live drone model flying the planned route over Nairobi terrain
