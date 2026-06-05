@@ -339,7 +339,6 @@ export default function EmergencyPanel({
           <p className="text-[11px] text-amber-700 leading-relaxed">
             <span className="font-bold">⚡ Emergency orders</span> are given top priority.
             The AI will load and dispatch the right supplies immediately.
-            You will receive an SMS when the drone is en route.
           </p>
         </div>
       )}

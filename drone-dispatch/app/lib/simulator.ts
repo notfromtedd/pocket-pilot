@@ -50,7 +50,6 @@ export interface FlightPlanOptions {
 // ── CONSTANTS ──
 
 const EARTH_RADIUS_KM = 6371;
-const SMS_TRIGGER_DISTANCE_M = 150;
 const DEFAULT_CRUISE_ALT = 120;   // meters
 const DEFAULT_MAX_SPEED = 65;     // km/h
 const URGENCY_SPEED_BOOST = {
@@ -127,12 +126,6 @@ export function interpolatePosition(
   return { lat, lng, alt, speed, heading: routeSample.heading, battery, phase, activeWaypointIndex };
 }
 
-// ── PROXIMITY CHECK ──
-
-/** Returns true if the drone is within SMS trigger distance of the target */
-export function isWithinSMSRange(drone: GeoPoint, target: GeoPoint): boolean {
-  return haversineDistance(drone, target) <= SMS_TRIGGER_DISTANCE_M;
-}
 
 /** Get the remaining distance in meters */
 export function remainingDistance(drone: GeoPoint, target: GeoPoint): number {

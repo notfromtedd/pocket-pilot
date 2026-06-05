@@ -5,7 +5,7 @@ import dynamic from "next/dynamic";
 import { supabase } from "../lib/supabase";
 import {
   createFlightPlan, createRoutePathFromWaypoints, haversineDistance, interpolatePosition, remainingDistance,
-  isWithinSMSRange, formatDistance, formatTime,
+  formatDistance, formatTime,
   type FlightPhase, type FlightPlan, type RoutePoint,
 } from "../lib/simulator";
 import { DEFAULT_DRONE_ID, DRONE_FLEET, type DroneFleetUnit } from "../lib/fleet";
@@ -26,7 +26,6 @@ interface Ticket {
   latitude: number;
   longitude: number;
   status: string;
-  sms_sent?: boolean;
   drone_id?: string;
   order_id?: string;
   call_transcript?: string;
@@ -144,7 +143,6 @@ export default function AdminControlCenter() {
   const simulationsRef = useRef<Record<string, MissionSimulation>>({});
   const selectedTicketRef = useRef<Ticket | null>(null);
   const selectedDroneIdRef = useRef(selectedDroneId);
-  const smsSentRef = useRef<Record<string, boolean>>({});
   const logsEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { logsEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [flightLogs]);
@@ -404,7 +402,6 @@ export default function AdminControlCenter() {
       if (outboundProgress > 1) outboundProgress = 1;
 
       const vec = interpolatePosition(plan, outboundProgress);
-      const dist = remainingDistance({ lat: vec.lat, lng: vec.lng }, plan.destination);
       const telemetry: DroneTelemetryRow = {
         ticket_id: ticket.id,
         order_id: ticket.order_id,
@@ -440,16 +437,6 @@ export default function AdminControlCenter() {
       if (vec.phase !== lastPhase) {
         lastPhase = vec.phase;
         addLog(`🛰️ ${activeDroneId} phase — ${vec.phase}`);
-      }
-
-      if (!smsSentRef.current[ticket.id] && isWithinSMSRange({ lat: vec.lat, lng: vec.lng }, plan.destination)) {
-        smsSentRef.current[ticket.id] = true;
-        addLog(`📱 SMS triggered — ${Math.round(dist)}m from target`);
-        fetch("/api/send-sms", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ phone: ticket.customer_phone, customerName: ticket.customer_name, ticketId: ticket.id, distanceMeters: dist }),
-        }).catch(console.error);
-        await supabase.from("tickets").update({ sms_sent: true }).eq("id", ticket.id);
       }
 
       if (outboundProgress >= 1) {
@@ -488,7 +475,6 @@ export default function AdminControlCenter() {
         if (selectedTicket.status === "IN_FLIGHT") {
           setDroneState("AIRBORNE");
           if (!simulationsRef.current[selectedTicket.id] && tel.route_path?.length > 1) {
-            smsSentRef.current[selectedTicket.id] = !!selectedTicket.sms_sent;
             const resumeDroneId = selectedTicket.drone_id || tel.drone_id || selectedDroneId || DEFAULT_DRONE_ID;
             const resumeBase = getDroneBasePosition(resumeDroneId);
             setSelectedDroneId(resumeDroneId);
@@ -624,7 +610,6 @@ export default function AdminControlCenter() {
     setActiveWaypointIndex(0);
     setRoutePath([]);
     setDroneState("AIRBORNE");
-    smsSentRef.current[selectedTicket.id] = false;
     addLog(`🚀 Launch vector approved for ${launchDroneId}. Drone ascending...`);
 
     await supabase.from("tickets").update({ status: "IN_FLIGHT", drone_id: launchDroneId }).eq("id", selectedTicket.id);

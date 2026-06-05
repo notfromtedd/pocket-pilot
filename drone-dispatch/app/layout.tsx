@@ -4,7 +4,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Drone Dispatch",
-  description: "AI-powered drone delivery dispatch system for Nairobi. Real-time tracking, intelligent routing, and automated SMS notifications.",
+  description: "AI-powered drone delivery dispatch system for Nairobi. Real-time tracking and intelligent routing.",
 };
 
 export default function RootLayout({

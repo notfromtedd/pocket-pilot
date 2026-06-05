@@ -18,7 +18,6 @@ AI-powered drone delivery dispatch system for medical emergencies in Nairobi. Du
 - **Emergency voice dispatch** — speech recognition feeds a transcript to AI, which matches it to inventory and auto-creates a prioritized ticket with coordinates
 - **Real-time fleet telemetry** — Supabase Realtime pushes drone position, altitude, battery, and flight phase at 250ms intervals
 - **3D FPV map** — Mapbox GL + Three.js renders a live drone model flying the planned route over Nairobi terrain
-- **SMS proximity alerts** — Africa's Talking / Twilio sends the customer an SMS when the drone is within 150m of their location
 - **Order system** — cart, checkout, order history, and admin product/revenue management
 
 ---
@@ -106,14 +105,6 @@ AI_PROVIDER=anthropic
 ANTHROPIC_API_KEY=
 # GOOGLE_AI_API_KEY=      # only needed if AI_PROVIDER=gemini
 
-# SMS (default: auto — tries Africa's Talking, then Twilio, then mock)
-SMS_PROVIDER=auto
-AT_API_KEY=
-AT_USERNAME=
-AT_ENV=sandbox
-# TWILIO_ACCOUNT_SID=
-# TWILIO_AUTH_TOKEN=
-# TWILIO_PHONE=
 ```
 
 ### 3. Run
@@ -132,7 +123,6 @@ Open [http://localhost:3000](http://localhost:3000).
 - [x] AI flight planner — per-drone origin, bearing-aware hazard routing
 - [x] Emergency voice dispatch
 - [x] Real-time fleet telemetry (Supabase Realtime)
-- [x] SMS proximity alerts
 - [x] 5-drone fleet with distinct home bases
 - [x] Revenue and product management panels
 
