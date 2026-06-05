@@ -29,12 +29,16 @@ function inNairobi(lat: number, lng: number) {
 
 export async function POST(request: Request) {
   const body = await request.json();
-  const { destination, urgency_level, payload_item, current_altitude } = body as {
+  const { destination, urgency_level, payload_item, current_altitude, origin: rawOrigin } = body as {
     destination: { lat: number; lng: number };
     urgency_level: string;
     payload_item: string;
     current_altitude: number;
+    origin?: { lat: number; lng: number };
   };
+  const origin = (rawOrigin && inNairobi(rawOrigin.lat, rawOrigin.lng))
+    ? rawOrigin
+    : { lat: -1.2921, lng: 36.8219 };
 
   if (!destination?.lat || !destination?.lng) {
     return NextResponse.json({ error: "destination required" }, { status: 400 });
@@ -44,7 +48,7 @@ export async function POST(request: Request) {
   }
 
   const systemPrompt = `You are an AI flight planner for a drone delivery network in Nairobi, Kenya.
-Origin (base): -1.2921, 36.8219 (near KICC, Nairobi CBD).
+Origin (base): ${origin.lat.toFixed(4)}, ${origin.lng.toFixed(4)}.
 
 Nairobi airspace zones:
 HIGH RISK — avoid overflight:
@@ -71,15 +75,15 @@ Propose 2-3 intermediate waypoints routing around hazards.
 
 CRITICAL: In avoided_risks, only list zones that actually intersect or border the straight-line path between this specific origin and destination. Do not list all known hazards — only the ones the route genuinely navigates around for this delivery. If a zone is far from the route, omit it.`;
 
-  const dLat = destination.lat - (-1.2921);
-  const dLng = destination.lng - 36.8219;
+  const dLat = destination.lat - origin.lat;
+  const dLng = destination.lng - origin.lng;
   const bearingDeg = Math.round(Math.atan2(dLng, -dLat) * (180 / Math.PI) + 360) % 360;
   const cardinal = bearingDeg < 22.5 || bearingDeg >= 337.5 ? "N" : bearingDeg < 67.5 ? "NE" : bearingDeg < 112.5 ? "E" : bearingDeg < 157.5 ? "SE" : bearingDeg < 202.5 ? "S" : bearingDeg < 247.5 ? "SW" : bearingDeg < 292.5 ? "W" : "NW";
 
   const userPrompt = `Plan this drone delivery:
 - Payload: ${payload_item}
 - Urgency: ${urgency_level}
-- Origin: -1.2921, 36.8219
+- Origin: ${origin.lat.toFixed(4)}, ${origin.lng.toFixed(4)}
 - Destination: ${destination.lat.toFixed(4)}, ${destination.lng.toFixed(4)} (bearing ${bearingDeg}° ${cardinal} from origin)
 - Requested cruise altitude: ${current_altitude}m
 

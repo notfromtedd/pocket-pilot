@@ -683,6 +683,7 @@ export default function AdminControlCenter() {
           urgency_level: selectedTicket.urgency_level,
           payload_item: selectedTicket.payload_item,
           current_altitude: demoCruiseAltitude,
+          origin: getDroneBasePosition(selectedDroneId),
         }),
       });
       const data: AIPlan & { error?: string } = await res.json();
