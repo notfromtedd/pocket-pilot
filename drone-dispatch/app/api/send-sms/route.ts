@@ -138,7 +138,7 @@ function buildDeliveryMessage({
   const distance = typeof distanceMeters === 'number' ? Math.max(0, Math.round(distanceMeters)) : null;
   const locationHint = distance === null ? 'near your location' : `${distance}m away`;
 
-  return `Pocket Pilot: Hi ${name}, your drone delivery ${shortTicket} is ${locationHint}. Please prepare for package drop-off.`;
+  return `Drone Dispatch: Hi ${name}, your drone delivery ${shortTicket} is ${locationHint}. Please prepare for package drop-off.`;
 }
 
 function normalizePhone(phone: string | undefined) {

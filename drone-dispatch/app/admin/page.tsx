@@ -741,7 +741,7 @@ export default function AdminControlCenter() {
         <div className="bg-white/40 backdrop-blur-xl border border-white/60 rounded-2xl px-4 py-2 flex items-center justify-between shadow-[0_4px_16px_-4px_rgba(0,0,0,0.04)]">
           <div className="flex items-center gap-2">
             <span className="text-lg">🚁</span>
-            <h1 className="text-sm font-bold text-[#1a202c]">Pocket Pilot Admin</h1>
+            <h1 className="text-sm font-bold text-[#1a202c]">Drone Dispatch Admin</h1>
           </div>
           <div className="flex bg-white/50 border border-white/80 rounded-full p-0.5">
             {ADMIN_TABS.map((tab) => (

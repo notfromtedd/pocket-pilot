@@ -3,7 +3,7 @@ import "mapbox-gl/dist/mapbox-gl.css";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Pocket Pilot — Drone Dispatch",
+  title: "Drone Dispatch",
   description: "AI-powered drone delivery dispatch system for Nairobi. Real-time tracking, intelligent routing, and automated SMS notifications.",
 };
 

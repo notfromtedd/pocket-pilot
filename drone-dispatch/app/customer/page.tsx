@@ -404,7 +404,7 @@ export default function CustomerView() {
             <h1 className="text-lg font-bold text-[#1a202c]">
               Hey, {user?.fullName?.split(" ")[0] || "there"} 👋
             </h1>
-            <p className="text-[11px] text-slate-500">Pocket Pilot · Nairobi</p>
+            <p className="text-[11px] text-slate-500">Drone Dispatch · Nairobi</p>
           </div>
           <div className="flex items-center gap-2">
             {/* Cart button */}

@@ -1,5 +1,5 @@
 /**
- * Pocket Pilot — Flight Vector Simulator
+ * Drone Dispatch — Flight Vector Simulator
  * 
  * Provides geo-math utilities for interpolating drone flight paths,
  * calculating distances, and determining proximity thresholds.

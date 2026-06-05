@@ -96,7 +96,7 @@ export default function AuthPage() {
           <div className="w-16 h-16 mx-auto mb-4 bg-white/50 backdrop-blur-xl border border-white/60 rounded-2xl flex items-center justify-center shadow-[0_8px_32px_-8px_rgba(0,0,0,0.08)]">
             <span className="text-2xl">🚁</span>
           </div>
-          <h1 className="text-2xl font-bold tracking-tight text-[#1a202c]">Pocket Pilot</h1>
+          <h1 className="text-2xl font-bold tracking-tight text-[#1a202c]">Drone Dispatch</h1>
           <p className="text-xs text-slate-500 mt-1">Medical Drone Dispatch — Nairobi</p>
         </div>
 

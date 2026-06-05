@@ -45,23 +45,45 @@ export async function POST(request: Request) {
 
   const systemPrompt = `You are an AI flight planner for a drone delivery network in Nairobi, Kenya.
 Origin (base): -1.2921, 36.8219 (near KICC, Nairobi CBD).
-Nairobi geography context:
-- CBD / Upperhill: -1.28 to -1.31, 36.81 to 36.83 — dense 30-120m towers, avoid direct overflight
-- Westlands: -1.265, 36.803 — telecom masts 60-90m, route around if heading NW
-- Karen / Langata: -1.33 to -1.37, 36.69 to 36.76 — low residential, safe corridor
-- Eastleigh / Parklands: -1.26 to -1.28, 36.84 to 36.86 — medium density, 20-40m buildings
-- Industrial Area: -1.30 to -1.32, 36.84 to 36.86 — warehouses 10-20m, good corridor
-Safe cruise altitude range: 130-180m. Multiples of 5m only.
-Propose 2-3 intermediate waypoints that route around hazards. Each waypoint is a real geographic location in Nairobi.`;
+
+Nairobi airspace zones:
+HIGH RISK — avoid overflight:
+- CBD / Upperhill: -1.28 to -1.31, 36.81 to 36.83 — dense 30-120m towers
+- JKIA approach corridor: -1.31 to -1.36, 36.91 to 36.96 — active controlled airspace
+
+MEDIUM RISK — route around if on or near path:
+- Westlands masts: -1.255 to -1.275, 36.80 to 36.81 — telecom masts 60-90m
+- Muthaiga / Gigiri: -1.23 to -1.26, 36.83 to 36.86 — embassy restricted zones
+- Eastleigh: -1.265 to -1.285, 36.845 to 36.87 — dense residential 20-40m
+- South B / South C: -1.305 to -1.33, 36.83 to 36.86 — dense residential 15-30m
+- Kileleshwa / Lavington: -1.28 to -1.30, 36.77 to 36.80 — medium-density residential
+- Ngong Road corridor: -1.30 to -1.32, 36.76 to 36.80 — surface congestion, signal risk
+- Dagoretti / Kawangware: -1.29 to -1.32, 36.73 to 36.77 — dense informal settlement
+
+SAFE CORRIDORS:
+- Karen / Langata: -1.33 to -1.37, 36.69 to 36.76 — low residential
+- Industrial Area: -1.30 to -1.32, 36.84 to 36.86 — warehouses 10-20m
+- Ruaka / Banana Hill: -1.19 to -1.23, 36.79 to 36.83 — semi-urban, open
+- Embakasi / Mlolongo: -1.33 to -1.42, 36.93 to 37.02 — industrial, open
+
+Safe cruise altitude: 130-180m, multiples of 5m only.
+Propose 2-3 intermediate waypoints routing around hazards.
+
+CRITICAL: In avoided_risks, only list zones that actually intersect or border the straight-line path between this specific origin and destination. Do not list all known hazards — only the ones the route genuinely navigates around for this delivery. If a zone is far from the route, omit it.`;
+
+  const dLat = destination.lat - (-1.2921);
+  const dLng = destination.lng - 36.8219;
+  const bearingDeg = Math.round(Math.atan2(dLng, -dLat) * (180 / Math.PI) + 360) % 360;
+  const cardinal = bearingDeg < 22.5 || bearingDeg >= 337.5 ? "N" : bearingDeg < 67.5 ? "NE" : bearingDeg < 112.5 ? "E" : bearingDeg < 157.5 ? "SE" : bearingDeg < 202.5 ? "S" : bearingDeg < 247.5 ? "SW" : bearingDeg < 292.5 ? "W" : "NW";
 
   const userPrompt = `Plan this drone delivery:
 - Payload: ${payload_item}
 - Urgency: ${urgency_level}
 - Origin: -1.2921, 36.8219
-- Destination: ${destination.lat.toFixed(4)}, ${destination.lng.toFixed(4)}
+- Destination: ${destination.lat.toFixed(4)}, ${destination.lng.toFixed(4)} (bearing ${bearingDeg}° ${cardinal} from origin)
 - Requested cruise altitude: ${current_altitude}m
 
-Propose an intermediate waypoint route that avoids the main hazard corridors, with a recommended cruise altitude.`;
+Based on the bearing and destination coordinates, identify which specific zones lie on or near this route, then propose intermediate waypoints that avoid those zones only.`;
 
   const raw = await callWithTools<PlanInput>({
     systemPrompt,

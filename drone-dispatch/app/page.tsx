@@ -30,7 +30,7 @@ export default function Home() {
             <span className="text-3xl">🚁</span>
           </div>
           <h1 className="text-3xl font-bold tracking-tight text-[#1a202c] mb-2">
-            Pocket Pilot
+            Drone Dispatch
           </h1>
           <p className="text-sm text-slate-500 font-medium">
             AI-Powered Drone Dispatch — Nairobi
@@ -68,7 +68,7 @@ export default function Home() {
 
         {/* Footer */}
         <p className="mt-10 text-[10px] text-slate-400 uppercase tracking-widest font-medium">
-          Pocket Pilot v1.0 · Nairobi Hub Operations
+          Drone Dispatch v1.0 · Nairobi Hub Operations
         </p>
       </div>
     </div>
