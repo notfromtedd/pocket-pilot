@@ -866,7 +866,7 @@ export default function AdminControlCenter() {
           </div>
 
           {/* Command Panel */}
-          <div className="w-[25%] h-full bg-white/40 backdrop-blur-xl border border-white/60 rounded-3xl p-4 shadow-[0_8px_32px_-8px_rgba(0,0,0,0.06)] flex flex-col overflow-hidden">
+          <div className="w-[25%] h-full bg-white/40 backdrop-blur-xl border border-white/60 rounded-3xl p-4 shadow-[0_8px_32px_-8px_rgba(0,0,0,0.06)] flex flex-col overflow-y-auto custom-scrollbar">
             <div className="mb-3">
               <h2 className="text-sm font-bold text-[#1a202c]">Command Center</h2>
               <p className="text-[10px] text-slate-500">{selectedDrone.id} · {selectedDrone.name}</p>
@@ -1038,9 +1038,26 @@ export default function AdminControlCenter() {
                     </p>
                   )}
                   {selectedDroneReturning && (
-                    <p className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-[9px] font-semibold text-blue-700">
-                      {selectedDrone.id} is returning to base.
-                    </p>
+                    <div className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 flex flex-col gap-2">
+                      <p className="text-[9px] font-semibold text-blue-700">
+                        {selectedDrone.id} is returning to base.
+                      </p>
+                      <button 
+                        onClick={async () => {
+                          const base = getDroneBasePosition(selectedDrone.id);
+                          const stuckTel = fleetTelemetry[selectedDrone.id];
+                          if (stuckTel?.ticket_id) {
+                            await supabase.from("drone_telemetry").upsert({
+                              ...stuckTel, phase: "DELIVERED", lat: base.lat, lng: base.lng, alt: 0, speed: 0, active_waypoint_index: 0
+                            }, { onConflict: "ticket_id" });
+                            addLog(`⌂ ${selectedDrone.id} forced return completed.`);
+                          }
+                        }}
+                        className="bg-blue-600 hover:bg-blue-700 cursor-pointer text-white font-bold py-1.5 rounded-lg text-[9px] tracking-wider uppercase transition-colors text-center w-full shadow-[0_2px_4px_rgba(37,99,235,0.2)]"
+                      >
+                        Clear & Complete Return
+                      </button>
+                    </div>
                   )}
                   <button
                     onClick={handleAIPlanRoute}
@@ -1165,3 +1182,4 @@ export default function AdminControlCenter() {
     </div>
   );
 }
+

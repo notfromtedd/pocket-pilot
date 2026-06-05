@@ -100,8 +100,8 @@ export default function EmergencyPanel({
     }
 
     const recognition = new SpeechAPI();
-    recognition.continuous = true;
-    recognition.interimResults = true;
+    recognition.continuous = false;
+    recognition.interimResults = false;
     recognition.lang = "en-US";
 
     const finalParts: string[] = [];
@@ -346,3 +346,4 @@ export default function EmergencyPanel({
     </div>
   );
 }
+

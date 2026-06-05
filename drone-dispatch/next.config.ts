@@ -1,7 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  allowedDevOrigins: ['218cc872d61c98.lhr.life'],
+  allowedDevOrigins: ['9140e9a2ad17b3.lhr.life'],
 };
 
 export default nextConfig;
+
