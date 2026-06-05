@@ -57,14 +57,63 @@ COORDINATE RULES:
 - Never guess wildly — use fallback rather than wrong coordinates.
 
 NAIROBI LANDMARK COORDINATES (lat, lng):
-Sarit Centre: -1.2631, 36.8030
-Village Market: -1.2259, 36.8055
-Westgate Mall: -1.2636, 36.8025
+
+-- HOSPITALS --
 Kenyatta National Hospital: -1.3013, 36.8060
 Aga Khan Hospital: -1.2617, 36.8211
 Karen Hospital: -1.3215, 36.7121
 Nairobi Hospital: -1.2983, 36.7882
 MP Shah Hospital: -1.2702, 36.8152
+Mater Hospital: -1.3059, 36.8470
+Gertrude's Children Hospital: -1.2562, 36.8378
+Coptic Hospital: -1.2815, 36.8037
+Avenue Hospital: -1.2930, 36.7882
+Strathmore University Health: -1.3077, 36.8115
+
+-- HOTELS --
+Serena Hotel: -1.2871, 36.8140
+Fairmont The Norfolk: -1.2823, 36.8197
+Villa Rosa Kempinski: -1.2683, 36.8052
+Tribe Hotel Gigiri: -1.2260, 36.8059
+Safari Park Hotel: -1.2186, 36.8977
+Hemingways Nairobi Karen: -1.3207, 36.7136
+Crowne Plaza Upper Hill: -1.2989, 36.7793
+Ole Sereni Mombasa Road: -1.3309, 36.8490
+Radisson Blu Upper Hill: -1.2803, 36.8119
+House of Waine Karen: -1.3260, 36.7091
+
+-- RESTAURANTS & BARS --
+Carnivore Restaurant: -1.3326, 36.7831
+Talisman Restaurant Karen: -1.3173, 36.7143
+The Alchemist Westlands: -1.2686, 36.7981
+Tamarind Westlands: -1.2660, 36.7973
+Nyama Mama Westlands: -1.2695, 36.7841
+The Rusty Nail Karen: -1.3200, 36.7121
+Brew Bistro Westlands: -1.2668, 36.8012
+Lord Erroll Runda: -1.2011, 36.8071
+Osteria del Chianti Lavington: -1.2895, 36.7803
+Mediterraneo Westlands: -1.2647, 36.8018
+Artcaffe Westlands: -1.2672, 36.8048
+Java House Junction: -1.2994, 36.7762
+K'Osewe Ranalo Foods: -1.2835, 36.8295
+
+-- MALLS & SHOPPING --
+Sarit Centre: -1.2631, 36.8030
+Village Market: -1.2259, 36.8055
+Westgate Mall: -1.2636, 36.8025
+Two Rivers Mall: -1.1904, 36.8025
+The Hub Karen: -1.3285, 36.7079
+Junction Mall: -1.2994, 36.7762
+Yaya Centre: -1.2963, 36.7826
+Garden City Mall: -1.2195, 36.8933
+Prestige Plaza: -1.3082, 36.7763
+Galleria Mall Langata: -1.3385, 36.7695
+ABC Place Westlands: -1.2700, 36.8053
+Thika Road Mall: -1.2189, 36.8878
+T-Mall Langata: -1.3240, 36.7725
+Capital Centre South B: -1.3091, 36.8321
+
+-- AREAS & NEIGHBOURHOODS --
 KICC / CBD: -1.2921, 36.8219
 Westlands: -1.2684, 36.8078
 Parklands: -1.2617, 36.8211
@@ -77,7 +126,39 @@ Eastleigh: -1.2752, 36.8573
 South B / South C: -1.3100, 36.8330
 Industrial Area: -1.3050, 36.8450
 Ruaka: -1.2010, 36.7650
-Thika Road Mall: -1.2189, 36.8878`;
+Langata: -1.3350, 36.7780
+Runda: -1.1970, 36.8030
+Ridgeways: -1.2240, 36.8430
+Kileleshwa: -1.2870, 36.7790
+Spring Valley: -1.2590, 36.7890
+Riverside Drive: -1.2741, 36.7985
+Lower Kabete: -1.2480, 36.7610
+Kitisuru: -1.2390, 36.7830
+Loresho: -1.2540, 36.7710
+Rongai: -1.3990, 36.7450
+Syokimau: -1.3650, 36.8910
+Embakasi: -1.3190, 36.8980
+Kasarani: -1.2210, 36.8990
+Buruburu: -1.2990, 36.8680
+
+-- LANDMARKS & INSTITUTIONS --
+Nairobi National Museum: -1.2734, 36.8126
+Giraffe Centre: -1.3722, 36.7557
+Nairobi Arboretum: -1.2779, 36.7979
+Uhuru Park: -1.2895, 36.8200
+City Park Parklands: -1.2582, 36.8280
+Nairobi Railway Station: -1.2976, 36.8275
+Wilson Airport: -1.3219, 36.8147
+JKIA: -1.3192, 36.9275
+Nairobi National Park Gate: -1.3557, 36.8492
+Karen Blixen Museum: -1.3554, 36.7059
+Bomas of Kenya: -1.3468, 36.7598
+City Hall: -1.2855, 36.8233
+University of Nairobi: -1.2793, 36.8163
+Kenyatta University: -1.1792, 36.9336
+USIU Kasarani: -1.2191, 36.8826
+Strathmore University: -1.3077, 36.8115
+US Embassy Gigiri: -1.2283, 36.8082`;
 
   const userPrompt = `Emergency call transcript:
 "${transcript}"
