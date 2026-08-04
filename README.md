@@ -14,9 +14,6 @@ Drone Dispatch is an AI-powered drone delivery dispatch system for medical emerg
   <img src="images/admin-fpv-map.png" alt="Drone Dispatch admin — 3D flight map, drone in transit" width="700">
 </p>
 
-## The Idea
-<!-- TODO (your voice): why this project, why Nairobi, why medical delivery, what the hackathon/context was, how you and Teddy split the work, any moment you're proud of. Mirror the personal, slightly self-deprecating tone from your Mor Cakes README here. -->
-
 ## Technologies Used
 
 ### Frontend
@@ -161,9 +158,6 @@ pocket-pilot/
 - `GET/POST /api/orders` — order CRUD
 - `GET/POST /api/products` — product CRUD
 
-## Development Process
-<!-- TODO (your voice): how this got built — planning, hackathon timeline, how the AI planner/voice dispatch came together, what was hardest. Mirror your Mor "Development Process" numbered list. -->
-
 ## Setup and Installation
 
 ### Prerequisites
@@ -215,18 +209,8 @@ pocket-pilot/
    ```
    Open [http://localhost:3000](http://localhost:3000).
 
-## Lessons Learned
-<!-- TODO (your voice): technical + business takeaways, mirroring your Mor structure (Technical Skills / Development Practices / Business Understanding). You already have the raw material in summary.md and CUSTOMER_SIDE_DEEP_DIVE.md if you want to pull from there. -->
-
-## Acknowledgments
-<!-- TODO (your voice): Teddy, hackathon organizers/judges if applicable, any libraries or mentors worth a callout. -->
-
-## License
-
-<!-- TODO: confirm license + contact line, matching your Mor closing note -->
-
 ## Contact
 
-For questions, reach out to [your email] or open an issue.
+For questions, reach out to Barakacyril2006@gmail.com or open an issue.
 
 **If you found this project interesting, please give it a star!**
